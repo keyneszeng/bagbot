@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-09-06
+
+### 🐛 Bug fixes
+
+- **CLI no longer dumps traceback on common errors** (`src/bagbot/cli.py`)
+  `python -m bagbot.cli probe` with no token, with a bad token, or with a
+  network error now prints a single-line error message + hint and exits with
+  a proper code (2 for missing config, 1 for runtime errors). The full
+  Python traceback is reserved for genuinely unexpected errors and shows
+  only the last 5 lines.
+
+### 🛠 Tooling
+
+- **Installable as a package** via `pip install -e .` (no need to `cd` to
+  `src/` first). `pyproject.toml` defines the entry points and metadata.
+- **MyPy type checking** added to CI (`mypy --strict` config in
+  `pyproject.toml`).
+- **Ruff linting** added to CI with bugbear + security + pyupgrade rule set.
+- **CI matrix** now tests on Python 3.10, 3.11, AND 3.12.
+- **Nightly mutation testing** via `.github/workflows/mutation.yml` —
+  results uploaded as an artifact; soft warning if score drops below 50%.
+
+### 📊 Test coverage
+
+- 80 → **83** tests passing
+- Added 3 CLI error-handling tests (`tests/test_cli_errors.py`)
+
 ## [0.1.1] — 2026-09-06
 
 ### 🐛 Bug fixes (found by mutation testing)

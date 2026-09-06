@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bagbot"
-version = "0.1.1"
+version = "0.1.2"
 description = "The first self-funding, self-healing AI daemon for agents on Orbio — claim, watch, top-up, and rotate OpenRouter keys automatically. Chinese notifications built in."
 readme = "README.md"
 requires-python = ">=3.10"
