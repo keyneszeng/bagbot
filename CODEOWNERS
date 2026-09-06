@@ -1,0 +1,9 @@
+# BagBot code owners — automatically requested as reviewers on PRs.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: @keyneszeng reviews everything unless a more specific rule matches.
+*       @keyneszeng
+
+# Documentation gets a lighter touch.
+/docs/  @keyneszeng
+README.md @keyneszeng
