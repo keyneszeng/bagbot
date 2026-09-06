@@ -186,6 +186,7 @@ async def cmd_dashboard(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    from .orbio_mcp import OrbioMCPError
 
     p = argparse.ArgumentParser(prog="bagbot")
     p.add_argument("--log-level", default=None)
@@ -211,7 +212,29 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "dashboard": cmd_dashboard,
     }
-    return asyncio.run(table[args.cmd](args))
+    try:
+        return asyncio.run(table[args.cmd](args))
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+    except OrbioMCPError as e:
+        print(f"\n✗ {e}", file=sys.stderr)
+        print(
+            "  Hint: check ORBIO_MCP_URL and ORBIO_MCP_TOKEN in your .env.",
+            file=sys.stderr,
+        )
+        return 1
+    except SystemExit as e:
+        # Don't wrap _settings_or_die()'s intentional exit codes.
+        return int(e.code) if e.code is not None else 1
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        print(f"\n✗ Unexpected error: {e}", file=sys.stderr)
+        print("  Last 5 traceback lines:", file=sys.stderr)
+        tb_lines = traceback.format_exc().splitlines()
+        for line in tb_lines[-5:]:
+            print(f"    {line}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
