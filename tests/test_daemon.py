@@ -273,3 +273,148 @@ async def test_burn_rate_triggers_rotate(tmp_settings):
     r2 = await bot.tick()
     # At 50 USD / 0.05s = 3600 USD/h — way above 20 USD/h cap → rotate
     assert r2.action.value == "rotate"
+
+
+@pytest.mark.asyncio
+async def test_burn_rate_zero_dt_returns_zero(tmp_settings):
+    """Defensive: if two consecutive status samples have the same ts (impossible
+    in production, but the code path exists), burn rate should be 0, not Inf."""
+    from bagbot.state import KeyRecord
+    import time
+
+    bot = BagBot(tmp_settings)
+    await bot.state.init()
+    await bot.state.save_key(KeyRecord(
+        key_id="k_dt", secret="s",
+        headroom_usd=200.0, spend_usd=0.0,
+        created_at=time.time() - 3600,
+    ))
+
+    # Pin _last_status_ts to a fixed value AND freeze time.time so dt == 0
+    fixed_ts = 1_700_000_000.0
+    bot._last_status = KeyStatus(
+        key_id="k_dt", spend_usd=10.0,
+        headroom_usd=200.0, remaining_usd=190.0,
+    )
+    bot._last_status_ts = fixed_ts
+
+    # Monkey-patch time.time so it returns exactly the same value
+    real_time = time.time
+    time.time = lambda: fixed_ts
+    try:
+        fresh = KeyStatus(
+            key_id="k_dt", spend_usd=20.0,
+            headroom_usd=200.0, remaining_usd=180.0,
+        )
+        rate = bot._compute_burn_rate(fresh)
+    finally:
+        time.time = real_time
+
+    assert rate == 0.0, f"dt<=0 should return 0, got {rate}"
+
+
+@pytest.mark.asyncio
+async def test_burn_rate_zero_dt_strictly_less_than_returns_nonzero(tmp_settings):
+    """Edge case: if dt is exactly 0, we return 0; if dt is a hair positive,
+    we return a finite rate.  Regression test for the < vs <= boundary."""
+    from bagbot.state import KeyRecord
+    import time
+
+    bot = BagBot(tmp_settings)
+    await bot.state.init()
+    await bot.state.save_key(KeyRecord(
+        key_id="k_dt", secret="s",
+        headroom_usd=200.0, spend_usd=0.0,
+        created_at=time.time() - 3600,
+    ))
+
+    bot._last_status = KeyStatus(
+        key_id="k_dt", spend_usd=0.0,
+        headroom_usd=200.0, remaining_usd=200.0,
+    )
+    bot._last_status_ts = 100.0
+    real_time = time.time
+    time.time = lambda: 100.0 + 1e-9   # tiny positive dt
+    try:
+        fresh = KeyStatus(
+            key_id="k_dt", spend_usd=1.0,
+            headroom_usd=200.0, remaining_usd=199.0,
+        )
+        rate = bot._compute_burn_rate(fresh)
+    finally:
+        time.time = real_time
+
+    # With dt=1e-9 and delta=1.0, rate = 1e9 USD/h — very large but finite
+    assert rate > 0
+    assert rate < float("inf")
+
+
+@pytest.mark.asyncio
+async def test_action_delete_calls_mcp_and_retires(tmp_settings):
+    """Cover the DELETE branch which is currently only triggered by manual
+    action (no policy action produces it).  Verify the I/O sequence."""
+    from bagbot.state import KeyRecord
+    import time
+
+    delete_calls = {"n": 0}
+
+    def handler(req):
+        body = json.loads(req.content.decode())
+        tool = body.get("params", {}).get("name", "?")
+        if tool == "orbio_delete_key":
+            delete_calls["n"] += 1
+            return _ok(_structured({}))
+        if tool == "orbio_get_balance":
+            return _ok(_structured({"earned": 1, "claimed": 0, "unclaimed": 1}))
+        if tool == "orbio_get_key_status":
+            return _ok(_structured({
+                "key_id": "k_del", "spend": 5, "headroom": 200, "remaining": 195
+            }))
+        return _ok(_structured({}))
+
+    transport = httpx.MockTransport(handler)
+    bot = BagBot(tmp_settings)
+    bot.mcp._client = httpx.AsyncClient(transport=transport,
+                                         base_url=bot.mcp.endpoint,
+                                         headers={"Authorization": "Bearer tok"})
+    await bot.state.init()
+    await bot.state.save_key(KeyRecord(
+        key_id="k_del", secret="s",
+        headroom_usd=200.0, spend_usd=5.0,
+        created_at=time.time() - 3600,
+    ))
+
+    # Manually drive the DELETE branch
+    from bagbot.policy import Action
+    await bot._execute(Action.DELETE, "test delete",
+                        await bot.state.current_key(),
+                        type("B", (), {
+                            "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 1
+                        })(),
+                        None)
+
+    assert delete_calls["n"] == 1, "delete_key should have been called"
+    cur = await bot.state.current_key()
+    assert cur is None, "key should be retired after DELETE"
+
+
+@pytest.mark.asyncio
+async def test_action_alert_logs_event(tmp_settings):
+    """Cover the ALERT branch — verify it logs an event."""
+    from bagbot.policy import Action
+    from unittest.mock import AsyncMock
+
+    bot = BagBot(tmp_settings)
+    await bot.state.init()
+    # Replace notifier with a no-op so we don't accidentally try to deliver
+    bot.notifier = AsyncMock()
+
+    fake_balance = type("B", (), {
+        "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 0
+    })()
+
+    await bot._execute(Action.ALERT, "test alert", None, fake_balance, None)
+
+    # An event row should be in the DB
+    events = await bot.state.recent_events(limit=5)
+    assert any(e["kind"] == "alert" for e in events)

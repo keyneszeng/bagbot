@@ -192,6 +192,20 @@ class BagBot:
         if action == Action.NOTHING:
             return
 
+        # ALERT is special: it can fire even when there's no current key
+        # (the policy emits ALERT when there is no key and balance is low).
+        # It must run BEFORE the "current is None" guard below.
+        if action == Action.ALERT:
+            await self.state.log_event("warn", "alert", reason, {
+                "unclaimed_usd": balance.unclaimed_usd,
+            })
+            await self.notifier.notify(
+                "warn", "balance_low", "未领取余额偏低", reason,
+                {"unclaimed": balance.unclaimed_usd,
+                 "threshold": self.policy.low_balance_usd},
+            )
+            return
+
         if action == Action.CLAIM:
             key = await self.mcp.claim_key(cap_usd=self.policy.key_cap_usd)
             await self.state.save_key(KeyRecord(
@@ -209,6 +223,7 @@ class BagBot:
             )
             return
 
+        # All other actions (TOPUP, ROTATE, DELETE) need a current key.
         if current is None:
             log.warning("action %s requested but no current key", action.value)
             return
@@ -257,17 +272,6 @@ class BagBot:
             await self.notifier.notify(
                 "error", "key_deleted", "已停用 key", reason,
                 {"reason": reason},
-            )
-            return
-
-        if action == Action.ALERT:
-            await self.state.log_event("warn", "alert", reason, {
-                "unclaimed_usd": balance.unclaimed_usd,
-            })
-            await self.notifier.notify(
-                "warn", "balance_low", "未领取余额偏低", reason,
-                {"unclaimed": balance.unclaimed_usd,
-                 "threshold": self.policy.low_balance_usd},
             )
             return
 

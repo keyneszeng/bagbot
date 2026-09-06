@@ -90,6 +90,12 @@ async def test_topup_validates_positive_amount(settings):
         assert r.status_code == 400
         r = client.post("/api/topup", json={"amount": 0})
         assert r.status_code == 400
+        r = client.post("/api/topup", json={"amount": 200})  # exactly cap
+        assert r.status_code in (200, 502)  # allowed (or MCP error)
+        r = client.post("/api/topup", json={"amount": 201})  # just over cap
+        assert r.status_code == 400
+        r = client.post("/api/topup", json={"amount": 200.01})  # just over
+        assert r.status_code == 400
 
 
 def test_events_endpoint_returns_array(client):
