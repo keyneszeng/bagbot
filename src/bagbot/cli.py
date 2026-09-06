@@ -22,6 +22,41 @@ from .logging_setup import setup_logging
 log = logging.getLogger("bagbot.cli")
 
 
+# Fields that should never end up on stdout / in a JSON dump.
+# Match is case-insensitive on the key name, applied recursively to dicts
+# and lists.
+_REDACT_KEYS = {
+    "secret", "sk_or_v1", "sk-or-v1", "sk_live", "sk_test",
+    "authorization", "api_key", "apikey", "token", "password",
+    "private_key", "seed", "mnemonic",
+}
+
+
+def _redact(obj):
+    """Return a deep-copied version of `obj` with sensitive fields replaced
+    by '***REDACTED***'.  Recurses into dicts and lists."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() in _REDACT_KEYS:
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = _redact(v)
+        return out
+    if isinstance(obj, list):
+        return [_redact(x) for x in obj]
+    return obj
+
+
+def _dump(label: str, obj, *, redact: bool = True) -> None:
+    """Pretty-print `obj` as JSON.  When `redact` is True (default), sensitive
+    fields are replaced with '***REDACTED***' before printing."""
+    print(label)
+    if redact:
+        obj = _redact(obj)
+    print(json.dumps(obj, indent=2, default=str))
+
+
 def _settings_or_die():
     s = get_settings()
     if not s.orbio_mcp_token:
@@ -47,26 +82,33 @@ async def cmd_probe(args) -> int:
     async with OrbioMCPClient(s.orbio_mcp_url, s.orbio_mcp_token) as c:
         print("→ orbio_get_balance")
         bal = await c.get_balance()
-        print(json.dumps(bal.raw, indent=2, default=str))
+        _dump("  balance:", bal.raw)
 
         print("\n→ orbio_claim_key (cap=10 USD, dry-style probe)")
         key = await c.claim_key(cap_usd=10.0)
-        print(json.dumps({"key_id": key.key_id,
-                          "headroom_usd": key.headroom_usd}, indent=2))
+        # Print only non-secret fields of the issued key
+        _dump("  key (redacted):", {
+            "key_id": key.key_id,
+            "headroom_usd": key.headroom_usd,
+        }, redact=False)
 
         print("\n→ orbio_get_key_status")
         st = await c.get_key_status(key.key_id)
-        print(json.dumps(st.raw, indent=2, default=str))
+        _dump("  status:", st.raw)
 
         print("\n→ orbio_top_up_key (+5)")
         top = await c.top_up_key(key.key_id, 5.0)
-        print(json.dumps({"key_id": top.key_id,
-                          "headroom_usd": top.headroom_usd}, indent=2))
+        _dump("  top (redacted):", {
+            "key_id": top.key_id,
+            "headroom_usd": top.headroom_usd,
+        }, redact=False)
 
         print("\n→ orbio_rotate_key")
         rot = await c.rotate_key(key.key_id)
-        print(json.dumps({"key_id": rot.key_id,
-                          "headroom_usd": rot.headroom_usd}, indent=2))
+        _dump("  rotated (redacted):", {
+            "key_id": rot.key_id,
+            "headroom_usd": rot.headroom_usd,
+        }, redact=False)
 
         print("\n→ orbio_delete_key")
         await c.delete_key(key.key_id)

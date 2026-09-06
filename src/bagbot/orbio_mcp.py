@@ -81,6 +81,14 @@ class KeyStatus:
     last_used_at: Optional[float] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def used_fraction(self) -> float:
+        """Fraction of the original cap that has been spent."""
+        cap = self.headroom_usd + self.spend_usd
+        if cap <= 0:
+            return 0.0
+        return self.spend_usd / cap
+
     @classmethod
     def from_payload(cls, p: Dict[str, Any]) -> "KeyStatus":
         spend = float(p.get("spend", 0.0))

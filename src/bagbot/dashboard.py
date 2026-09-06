@@ -65,10 +65,12 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
                 "key_spend": last.status.spend_usd if last.status else 0.0,
                 "key_remaining": last.status.remaining_usd if last.status else 0.0,
             }
+        # Starlette ≥ 0.27 / FastAPI ≥ 0.110: signature is
+        #   TemplateResponse(request, name, context)
         return _TEMPLATES.TemplateResponse(
+            request,
             "index.html",
             {
-                "request": request,
                 "wallet_label": settings.wallet_label,
                 "wallet": settings.orbio_wallet,
                 "low_balance": settings.low_balance_usd,

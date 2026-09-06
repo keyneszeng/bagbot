@@ -135,6 +135,7 @@ class BagBot:
         # Burn rate from history.
         burn_rate = self._compute_burn_rate(status)
 
+        # Use sentinel 0.0 for everything key-related if we couldn't read status.
         snap = Snapshot(
             has_key=current is not None,
             key_id=current.key_id if current else None,
@@ -142,17 +143,12 @@ class BagBot:
                 (time.time() - current.created_at) / 3600.0 if current else 0.0
             ),
             spend_rate_usd_per_hour=burn_rate,
-            key_used_fraction=status.used_fraction if status else 0.0
-                if status is not None else 0.0,
-            key_remaining_usd=status.remaining_usd if status else 0.0,
+            key_used_fraction=status.used_fraction if status is not None else 0.0,
+            key_remaining_usd=status.remaining_usd if status is not None else 0.0,
             unclaimed_usd=balance.unclaimed_usd,
             earned_usd=balance.earned_usd,
             claimed_usd=balance.claimed_usd,
         )
-        # Fix attribute precedence (the dataclass __post_init__ runs first).
-        if status is not None:
-            snap.key_used_fraction = status.used_fraction
-            snap.key_remaining_usd = status.remaining_usd
 
         action, reason = decide(snap, self.policy)
         log.info("tick: bal=$%.2f unclaimed key=%s action=%s reason=%s",
