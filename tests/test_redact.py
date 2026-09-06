@@ -1,6 +1,5 @@
 """Tests for the secret-redaction helper in the CLI."""
 
-import pytest
 from bagbot.cli import _redact, _REDACT_KEYS
 
 

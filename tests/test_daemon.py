@@ -6,28 +6,24 @@ daemon.tick() → decision → action → state update → notification.
 
 import asyncio
 import json
-import os
-import tempfile
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import httpx
 import pytest
 
-from bagbot.config import Settings
 from bagbot.daemon import BagBot
-from bagbot.orbio_mcp import Key, KeyStatus, Balance
+from bagbot.orbio_mcp import KeyStatus
 
 
-def _ok(payload: Dict[str, Any]) -> httpx.Response:
+def _ok(payload: dict[str, Any]) -> httpx.Response:
     return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": payload})
 
 
-def _structured(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _structured(payload: dict[str, Any]) -> dict[str, Any]:
     return {"structuredContent": payload}
 
 
-def _make_transport(handlers: Dict[str, Dict[str, Any]]):
+def _make_transport(handlers: dict[str, dict[str, Any]]):
     """Build a MockTransport that returns pre-canned responses per tool name."""
     def handler(req: httpx.Request) -> httpx.Response:
         # Extract the tool name from the JSON-RPC body

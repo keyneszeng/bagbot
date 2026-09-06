@@ -1,0 +1,78 @@
+name: Mutation Testing (nightly)
+
+# Runs the project's custom mutation tester (scripts/mutation_test.py)
+# every night at 04:00 UTC and on every push to main.  Results are posted
+# as a PR-style comment via a workflow artifact (we don't auto-PR).
+#
+# Why nightly and not on every PR:
+#   * 134 mutations × ~5s each = ~10 min, plus boot time.
+#   * Mutation tests are most useful as a *trend* (is the score going
+#     up or down), not as a per-PR gate.
+#
+# If you want to gate PRs, uncomment the `pull_request:` trigger below
+# and accept the slower PR feedback.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"   # 04:00 UTC daily
+  push:
+    branches: [main]
+  workflow_dispatch:        # manual trigger from the Actions UI
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Mutation test (full suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-xdist httpx fastapi aiosqlite
+
+      - name: Run mutation tester
+        run: |
+          python scripts/mutation_test.py --max 500 --workers auto \
+            > /tmp/mutation.log 2>&1
+          tail -200 /tmp/mutation.log
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: /tmp/mutation.log
+          retention-days: 30
+
+      - name: Check mutation score
+        # If the script exits with 0 → all mutations killed (perfect).
+        # If it exits with 2 → some survived (warning).
+        # If it exits with 1 → baseline tests failed (error).
+        # We allow the job to pass as long as the score didn't drop
+        # catastrophically (we don't fail the job on surviving
+        # mutations — that would create a hard-to-maintain gate).
+        run: |
+          echo "Mutation test exit code: $?"
+          if grep -q "Mutation score:" /tmp/mutation.log; then
+            SCORE=$(grep "Mutation score:" /tmp/mutation.log | tail -1 | awk '{print $3}' | tr -d '%')
+            echo "Mutation score: ${SCORE}%"
+            echo "## Mutation score: ${SCORE}%" >> $GITHUB_STEP_SUMMARY
+            if (( $(echo "$SCORE < 50" | bc -l) )); then
+              echo "::warning::Mutation score dropped below 50% (${SCORE}%) — consider expanding tests"
+            fi
+          else
+            echo "::warning::Mutation tester did not produce a score"
+          fi

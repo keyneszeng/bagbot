@@ -1,6 +1,5 @@
 """Dashboard route tests — using FastAPI TestClient + async fixtures."""
 
-import asyncio
 import time
 
 import pytest

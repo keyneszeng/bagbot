@@ -9,8 +9,12 @@
 > Orbio lets you earn LLM credits just by holding tokens — but somebody still has to claim keys, watch balances, and rotate old ones. **BagBot is the first daemon that fully automates all that messy work, with Chinese-language notifications built in.** Your agent no longer needs you to top it up — it manages itself.
 
 [![Orbio Build Week](https://img.shields.io/badge/Orbio-Build%20Week-7B61FF)](https://orbio.so/build)
+[![CI](https://github.com/keyneszeng/bagbot/workflows/CI/badge.svg)](https://github.com/keyneszeng/bagbot/actions)
+[![Mutation Testing](https://github.com/keyneszeng/bagbot/workflows/Mutation%20Testing%20(nightly)/badge.svg)](https://github.com/keyneszeng/bagbot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)](tests/)
+[![Mutation score: 92.9%](https://img.shields.io/badge/mutation%20score%20(policy)-92.9%25-brightgreen.svg)](scripts/mutation_test.py)
 
 ---
 
@@ -58,21 +62,20 @@ BagBot is a 7×24 unattended Python daemon that:
 # 1. Install
 git clone https://github.com/keyneszeng/bagbot.git
 cd bagbot
-python3.10 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+make install          # creates .venv, installs deps, copies .env.example → .env
 
 # 2. Configure
-cp .env.example .env
-# Edit .env: fill in ORBIO_WALLET, NOTIFIER_WEBHOOK, etc.
+vim .env             # fill in ORBIO_MCP_TOKEN + ORBIO_WALLET (+ a notifier)
 
-# 3. First-time: test all 6 MCP tools
-python -m bagbot.cli probe
+# 3. Verify
+make test            # 80 unit + integration tests, ~30s
+make probe           # exercises all 6 Orbio MCP tools (real network)
 
 # 4. Start daemon (foreground)
-python -m bagbot.cli run
-
-# 5. Or install as a service (macOS launchd)
-bash scripts/install_launchd.sh
+make run
+# or, as a 7×24 service:
+bash scripts/install_launchd.sh    # macOS
+bash scripts/install_systemd.sh    # Linux
 ```
 
 ---
@@ -83,18 +86,46 @@ bash scripts/install_launchd.sh
 
 ---
 
-## 📦 What you get out of the box
+## 📦 Project structure
 
 | File | What it does |
 |---|---|
-| `src/bagbot/orbio_mcp.py` | Python async client wrapping all 6 Orbio MCP tools |
+| `src/bagbot/orbio_mcp.py` | Async client wrapping all 6 Orbio MCP tools (with retry) |
 | `src/bagbot/daemon.py` | Core 7×24 event loop (monitor → decide → act → report) |
-| `src/bagbot/policy.py` | Pluggable decision rules (low-balance, anomaly, rotation age) |
-| `src/bagbot/state.py` | SQLite state store (balances, keys, events, history) |
-| `notifiers/*.py` | 4 notifier adapters, all with Chinese templates |
-| `dashboard/app.py` | FastAPI web UI, Chinese-first |
+| `src/bagbot/policy.py` | Pure-function decision engine (CLAIM/TOPUP/ROTATE/DELETE/ALERT) |
+| `src/bagbot/state.py` | SQLite state store (keys, balances, events) |
+| `src/bagbot/notifier.py` | 4 notifier adapters (Feishu, WeChat, Webhook, SMTP), Chinese templates |
+| `src/bagbot/dashboard.py` | FastAPI web UI (Chinese-first, dark theme) |
 | `scripts/install_launchd.sh` | One-command macOS service install |
 | `scripts/install_systemd.sh` | One-command Linux service install |
+| `scripts/mutation_test.py` | Crash-safe mutation tester (used in CI nightly) |
+| `tests/test_*.py` | 80 tests across 8 modules (~30s, parallel) |
+| `docs/guide.zh-CN.md` | 283-line Chinese user guide |
+| `docs/BUILD_WEEK.md` | Pre-filled Build Week application text |
+| `CHANGELOG.md` | Version history with bug-fix attribution |
+| `pyproject.toml` | ruff + mypy + pytest configuration |
+
+---
+
+## ✅ Quality bar
+
+| Tool | Status | Where |
+|---|---|---|
+| **Unit + integration tests** | 80 passing, ~30s | `tests/`, runs in CI on Python 3.10/3.11/3.12 |
+| **Mutation testing** | nightly, score: policy 92.9% / daemon 94.1% | `scripts/mutation_test.py`, runs in CI nightly |
+| **Ruff lint** | passing | `pyproject.toml` (`[tool.ruff.lint]`) |
+| **MyPy type check** | passing | `pyproject.toml` (`[tool.mypy]`) |
+| **Shellcheck** | passing | `.github/workflows/ci.yml` |
+| **Pre-commit safety** | secrets in `.gitignore`, MCP secrets redacted in CLI output | `_redact()` in `src/bagbot/cli.py` |
+
+Run all checks locally:
+
+```bash
+make test                                    # 80 tests
+ruff check src/ tests/                       # lint
+mypy src/                                    # type check
+python scripts/mutation_test.py --module policy   # ~90s
+```
 
 ---
 

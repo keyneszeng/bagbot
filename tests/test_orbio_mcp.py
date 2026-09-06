@@ -7,7 +7,7 @@ import pytest
 import httpx
 
 from bagbot.orbio_mcp import (
-    Balance, Key, KeyStatus, OrbioMCPClient, OrbioMCPError,
+    KeyStatus, OrbioMCPClient, OrbioMCPError,
 )
 
 
@@ -71,7 +71,6 @@ async def test_claim_key_caps_strict_boundary():
 @pytest.mark.asyncio
 async def test_used_fraction_zero_cap_returns_zero():
     """Edge case: cap == 0 means used_fraction is undefined → return 0."""
-    from bagbot.orbio_mcp import KeyStatus
     s = KeyStatus(key_id="k", spend_usd=0.0, headroom_usd=0.0, remaining_usd=0.0)
     assert s.used_fraction == 0.0
 
@@ -79,7 +78,6 @@ async def test_used_fraction_zero_cap_returns_zero():
 @pytest.mark.asyncio
 async def test_used_fraction_negative_cap_returns_zero():
     """Edge case: cap < 0 (server bug) → return 0 to avoid div-by-zero sign issues."""
-    from bagbot.orbio_mcp import KeyStatus
     s = KeyStatus(key_id="k", spend_usd=-1.0, headroom_usd=-1.0, remaining_usd=0.0)
     assert s.used_fraction == 0.0
 
@@ -87,7 +85,6 @@ async def test_used_fraction_negative_cap_returns_zero():
 @pytest.mark.asyncio
 async def test_used_fraction_normal():
     """Normal case: spend=80, headroom=120 → 80/200 = 0.4."""
-    from bagbot.orbio_mcp import KeyStatus
     s = KeyStatus(key_id="k", spend_usd=80.0, headroom_usd=120.0, remaining_usd=120.0)
     assert abs(s.used_fraction - 0.4) < 1e-9
 

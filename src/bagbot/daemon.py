@@ -17,13 +17,11 @@ import logging
 import signal
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from .config import Settings
 from .notifier import Notifier
 from .orbio_mcp import (
     Balance,
-    Key,
     KeyStatus,
     OrbioMCPClient,
     OrbioMCPError,
@@ -38,7 +36,7 @@ log = logging.getLogger("bagbot.daemon")
 class TickReport:
     ts: float
     balance: Balance
-    status: Optional[KeyStatus]
+    status: KeyStatus | None
     action: Action
     reason: str
 
@@ -59,8 +57,8 @@ class BagBot:
             endpoint=settings.orbio_mcp_url, token=settings.orbio_mcp_token
         )
         self._stop_event = asyncio.Event()
-        self._last_tick: Optional[TickReport] = None
-        self._last_status: Optional[KeyStatus] = None
+        self._last_tick: TickReport | None = None
+        self._last_status: KeyStatus | None = None
         self._last_status_ts: float = 0.0
 
     # ── Lifecycle ────────────────────────────────────────────────────
@@ -124,7 +122,7 @@ class BagBot:
         )
 
         current = await self.state.current_key()
-        status: Optional[KeyStatus] = None
+        status: KeyStatus | None = None
         if current is not None:
             try:
                 status = await self.mcp.get_key_status(current.key_id)
@@ -167,7 +165,7 @@ class BagBot:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    def _compute_burn_rate(self, status: Optional[KeyStatus]) -> float:
+    def _compute_burn_rate(self, status: KeyStatus | None) -> float:
         """Estimate USD/hour of key spend.
 
         For now: if we have a previous status sample, divide its spend delta
@@ -185,9 +183,9 @@ class BagBot:
         self,
         action: Action,
         reason: str,
-        current: Optional[KeyRecord],
+        current: KeyRecord | None,
         balance: Balance,
-        status: Optional[KeyStatus],
+        status: KeyStatus | None,
     ) -> None:
         if action == Action.NOTHING:
             return
@@ -278,11 +276,11 @@ class BagBot:
     # ── Public properties for the dashboard ──────────────────────────
 
     @property
-    def last_tick(self) -> Optional[TickReport]:
+    def last_tick(self) -> TickReport | None:
         return self._last_tick
 
     @property
-    def last_status(self) -> Optional[KeyStatus]:
+    def last_status(self) -> KeyStatus | None:
         return self._last_status
 
 

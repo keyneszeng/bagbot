@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -40,10 +40,10 @@ class Balance:
     claimed_usd: float
     unclaimed_usd: float
     currency: str = "USD"
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_payload(cls, p: Dict[str, Any]) -> "Balance":
+    def from_payload(cls, p: dict[str, Any]) -> Balance:
         return cls(
             earned_usd=float(p.get("earned", 0.0)),
             claimed_usd=float(p.get("claimed", 0.0)),
@@ -61,7 +61,7 @@ class Key:
     headroom_usd: float    # how much can still be spent on this key
     spend_usd: float = 0.0
     created_at: float = field(default_factory=time.time)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def used_fraction(self) -> float:
@@ -78,8 +78,8 @@ class KeyStatus:
     spend_usd: float
     headroom_usd: float
     remaining_usd: float
-    last_used_at: Optional[float] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    last_used_at: float | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def used_fraction(self) -> float:
@@ -90,7 +90,7 @@ class KeyStatus:
         return self.spend_usd / cap
 
     @classmethod
-    def from_payload(cls, p: Dict[str, Any]) -> "KeyStatus":
+    def from_payload(cls, p: dict[str, Any]) -> KeyStatus:
         spend = float(p.get("spend", 0.0))
         headroom = float(p.get("headroom", 0.0))
         return cls(
@@ -107,7 +107,7 @@ class KeyStatus:
 
 class OrbioMCPError(RuntimeError):
     """Generic Orbio MCP error."""
-    def __init__(self, tool: str, message: str, payload: Optional[dict] = None):
+    def __init__(self, tool: str, message: str, payload: dict | None = None):
         super().__init__(f"[{tool}] {message}")
         self.tool = tool
         self.payload = payload or {}
@@ -136,9 +136,9 @@ class OrbioMCPClient:
         self.token = token
         self.timeout = timeout
         self.max_retries = max_retries
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "OrbioMCPClient":
+    async def __aenter__(self) -> OrbioMCPClient:
         self._client = httpx.AsyncClient(
             base_url=self.endpoint,
             timeout=self.timeout,
@@ -157,7 +157,7 @@ class OrbioMCPClient:
 
     # ── Low-level transport ────────────────────────────────────────────
 
-    async def _call(self, tool: str, arguments: Optional[dict] = None) -> dict:
+    async def _call(self, tool: str, arguments: dict | None = None) -> dict:
         """Issue a JSON-RPC 2.0 tools/call request.
 
         Most MCP servers accept POST {endpoint} with a body of:
@@ -174,7 +174,7 @@ class OrbioMCPClient:
             "method": "tools/call",
             "params": {"name": tool, "arguments": arguments},
         }
-        last_err: Optional[Exception] = None
+        last_err: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = await self._client.post("", json=body)
@@ -270,7 +270,7 @@ class OrbioMCPClient:
     async def ensure_key(
         self,
         *,
-        current_key_id: Optional[str],
+        current_key_id: str | None,
         cap_usd: float,
         low_balance_threshold_usd: float,
     ) -> tuple[Key, str]:

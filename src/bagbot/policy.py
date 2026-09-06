@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class Action(str, Enum):
@@ -23,7 +22,7 @@ class Action(str, Enum):
 @dataclass
 class Snapshot:
     has_key: bool
-    key_id: Optional[str]
+    key_id: str | None
     key_age_hours: float
     spend_rate_usd_per_hour: float
     key_used_fraction: float        # 0..1

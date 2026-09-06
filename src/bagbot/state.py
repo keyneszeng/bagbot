@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -56,10 +56,10 @@ class KeyRecord:
     headroom_usd: float
     spend_usd: float
     created_at: float
-    retired_at: Optional[float] = None
-    retire_reason: Optional[str] = None
+    retired_at: float | None = None
+    retire_reason: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -99,7 +99,7 @@ class StateStore:
             )
             await db.commit()
 
-    async def current_key(self) -> Optional[KeyRecord]:
+    async def current_key(self) -> KeyRecord | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -113,7 +113,7 @@ class StateStore:
                 return None
             return KeyRecord(**dict(row))
 
-    async def recent_keys(self, limit: int = 20) -> List[KeyRecord]:
+    async def recent_keys(self, limit: int = 20) -> list[KeyRecord]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -135,7 +135,7 @@ class StateStore:
             )
             await db.commit()
 
-    async def recent_balances(self, limit: int = 200) -> List[Dict[str, Any]]:
+    async def recent_balances(self, limit: int = 200) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -147,7 +147,7 @@ class StateStore:
     # ── Events / log ────────────────────────────────────────────────
 
     async def log_event(
-        self, level: str, kind: str, message: str, payload: Optional[dict] = None
+        self, level: str, kind: str, message: str, payload: dict | None = None
     ) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -158,13 +158,13 @@ class StateStore:
             )
             await db.commit()
 
-    async def recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def recent_events(self, limit: int = 100) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT * FROM events ORDER BY ts DESC LIMIT ?", (limit,)
             )
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             async for r in cur:
                 d = dict(r)
                 if d.get("payload_json"):

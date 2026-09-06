@@ -1,6 +1,5 @@
 """Notifier template rendering + render safety tests."""
 
-import pytest
 
 from bagbot.notifier import render_message
 

@@ -14,7 +14,6 @@ import asyncio
 import json
 import logging
 import sys
-from typing import Optional
 
 from .config import get_settings
 from .logging_setup import setup_logging
@@ -185,7 +184,7 @@ async def cmd_dashboard(args) -> int:
     return 0
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(prog="bagbot")

@@ -15,13 +15,12 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import json
 import logging
 import smtplib
 import time
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any
 
 import httpx
 
@@ -43,7 +42,7 @@ class NotifyEvent:
     kind: str
     title: str       # short headline
     summary: str     # 1-2 sentence narrative
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
 
 
 # ── Locale helpers ────────────────────────────────────────────────────────
@@ -136,7 +135,7 @@ class FeishuAdapter(BaseAdapter):
     async def send(self, ev: NotifyEvent) -> None:
         if not self.cfg.feishu_webhook_url:
             return
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "msg_type": "interactive",
             "card": {
                 "header": {
@@ -258,7 +257,7 @@ class Notifier:
         kind: str,
         title: str,
         summary: str,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         if not self.adapters:
             return
@@ -269,6 +268,6 @@ class Notifier:
         results = await asyncio.gather(
             *(a.send(ev) for a in self.adapters), return_exceptions=True
         )
-        for a, r in zip(self.adapters, results):
+        for a, r in zip(self.adapters, results, strict=False):
             if isinstance(r, Exception):
                 log.warning("notifier %s failed on %s: %s", a.name, kind, r)

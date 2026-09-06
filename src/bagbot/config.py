@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -105,7 +104,7 @@ class Settings(BaseModel):
     timezone: str = Field(default="Asia/Shanghai", alias="TIMEZONE")
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         return cls(
             ORBIO_WALLET=_env("ORBIO_WALLET"),
             WALLET_LABEL=_env("WALLET_LABEL", "My Wallet"),
@@ -148,14 +147,15 @@ class Settings(BaseModel):
         )
 
 
+_cached: Settings | None = None
+
+
 def get_settings() -> Settings:
     """Cached settings accessor."""
     global _cached
-    try:
-        return _cached
-    except NameError:
+    if _cached is None:
         _cached = Settings.from_env()
-        return _cached
+    return _cached
 
 
 def reload_settings() -> Settings:

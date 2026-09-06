@@ -1,9 +1,6 @@
 """Config loader tests — verify defaults + env override + validation."""
 
-import os
-from pathlib import Path
 
-import pytest
 
 from bagbot import config as cfg_module
 

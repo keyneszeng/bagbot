@@ -1,22 +1,21 @@
 """Tests for the policy decision engine."""
 
-import pytest
 
 from bagbot.policy import Action, PolicyConfig, Snapshot, decide
 
 
 def make_snap(**overrides) -> Snapshot:
-    base = dict(
-        has_key=True,
-        key_id="k_abc",
-        key_age_hours=1.0,
-        spend_rate_usd_per_hour=1.0,
-        key_used_fraction=0.1,
-        key_remaining_usd=180.0,
-        unclaimed_usd=10.0,
-        earned_usd=100.0,
-        claimed_usd=50.0,
-    )
+    base = {
+        "has_key": True,
+        "key_id": "k_abc",
+        "key_age_hours": 1.0,
+        "spend_rate_usd_per_hour": 1.0,
+        "key_used_fraction": 0.1,
+        "key_remaining_usd": 180.0,
+        "unclaimed_usd": 10.0,
+        "earned_usd": 100.0,
+        "claimed_usd": 50.0,
+    }
     base.update(overrides)
     return Snapshot(**base)
 

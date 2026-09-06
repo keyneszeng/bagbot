@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -81,7 +81,7 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
         )
 
     @app.get("/api/state")
-    async def state() -> Dict[str, Any]:
+    async def state() -> dict[str, Any]:
         last = bot.last_tick
         if last is None:
             return {"status": "no_tick_yet", "ts": time.time()}
@@ -109,11 +109,11 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
         }
 
     @app.get("/api/events")
-    async def events(limit: int = 50) -> List[Dict[str, Any]]:
+    async def events(limit: int = 50) -> list[dict[str, Any]]:
         return await bot.state.recent_events(limit=min(limit, 200))
 
     @app.get("/api/balances")
-    async def balances(limit: int = 100) -> List[Dict[str, Any]]:
+    async def balances(limit: int = 100) -> list[dict[str, Any]]:
         return await bot.state.recent_balances(limit=min(limit, 500))
 
     @app.post("/api/claim")
@@ -122,7 +122,7 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
             async with bot.mcp:
                 key = await bot.mcp.claim_key(cap_usd=settings.key_cap_usd)
         except OrbioMCPError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
         return {"key_id": key.key_id, "headroom_usd": key.headroom_usd}
 
     @app.post("/api/rotate")
@@ -134,7 +134,7 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
             async with bot.mcp:
                 new_key = await bot.mcp.rotate_key(cur.key_id)
         except OrbioMCPError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
         return {
             "old_key_id": cur.key_id,
             "new_key_id": new_key.key_id,
@@ -155,7 +155,7 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
             async with bot.mcp:
                 new_key = await bot.mcp.top_up_key(cur.key_id, body.amount)
         except OrbioMCPError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
         return {
             "key_id": new_key.key_id,
             "headroom_usd": new_key.headroom_usd,
