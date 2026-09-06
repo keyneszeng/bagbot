@@ -54,6 +54,139 @@ async def test_claim_key_caps_input():
 
 
 @pytest.mark.asyncio
+async def test_claim_key_caps_strict_boundary():
+    """Boundary: cap_usd=200.0 is allowed, cap_usd=200.01 is not."""
+    async with OrbioMCPClient("https://x.example/mcp", "tok") as c:
+        c._client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda r: _mcp_ok({"key_id": "k", "secret": "s", "headroom": 200})),
+            base_url=c.endpoint)
+        # Exactly 200 — allowed
+        k = await c.claim_key(cap_usd=200.0)
+        assert k.key_id == "k"
+        # 200.01 — rejected (must be > 200, not >=)
+        with pytest.raises(ValueError):
+            await c.claim_key(cap_usd=200.01)
+
+
+@pytest.mark.asyncio
+async def test_used_fraction_zero_cap_returns_zero():
+    """Edge case: cap == 0 means used_fraction is undefined → return 0."""
+    from bagbot.orbio_mcp import KeyStatus
+    s = KeyStatus(key_id="k", spend_usd=0.0, headroom_usd=0.0, remaining_usd=0.0)
+    assert s.used_fraction == 0.0
+
+
+@pytest.mark.asyncio
+async def test_used_fraction_negative_cap_returns_zero():
+    """Edge case: cap < 0 (server bug) → return 0 to avoid div-by-zero sign issues."""
+    from bagbot.orbio_mcp import KeyStatus
+    s = KeyStatus(key_id="k", spend_usd=-1.0, headroom_usd=-1.0, remaining_usd=0.0)
+    assert s.used_fraction == 0.0
+
+
+@pytest.mark.asyncio
+async def test_used_fraction_normal():
+    """Normal case: spend=80, headroom=120 → 80/200 = 0.4."""
+    from bagbot.orbio_mcp import KeyStatus
+    s = KeyStatus(key_id="k", spend_usd=80.0, headroom_usd=120.0, remaining_usd=120.0)
+    assert abs(s.used_fraction - 0.4) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_ensure_key_balance_just_below_threshold_returns_insufficient():
+    """ensure_key: when no current key and unclaimed is JUST below threshold,
+    returns (None, 'insufficient_balance')."""
+    state = {"calls": 0}
+
+    def handler(req):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return _mcp_ok({"structuredContent":
+                             {"earned": 0, "claimed": 0, "unclaimed": 4.99}})
+        return _mcp_error("should not be called")
+
+    transport = httpx.MockTransport(handler)
+    async with OrbioMCPClient("https://x.example/mcp", "tok") as c:
+        c._client = httpx.AsyncClient(transport=transport, base_url=c.endpoint,
+                                       headers={"Authorization": f"Bearer {c.token}"})
+        result = await c.ensure_key(
+            current_key_id=None, cap_usd=200.0,
+            low_balance_threshold_usd=5.0,
+        )
+    assert result == (None, "insufficient_balance")
+
+
+@pytest.mark.asyncio
+async def test_ensure_key_topup_uses_cap_boundary():
+    """ensure_key: when key remaining is 0 and unclaimed == cap, topup (>= boundary)."""
+    state = {"calls": 0}
+
+    def handler(req):
+        state["calls"] += 1
+        body = json.loads(req.content.decode())
+        tool = body.get("params", {}).get("name", "?")
+        if state["calls"] == 1:
+            return _mcp_ok({"structuredContent":
+                             {"earned": 0, "claimed": 0, "unclaimed": 200.0}})
+        if tool == "orbio_get_key_status":
+            return _mcp_ok({"structuredContent": {
+                "key_id": "k_old", "spend": 200, "headroom": 0, "remaining": 0
+            }})
+        if tool == "orbio_top_up_key":
+            return _mcp_ok({"structuredContent": {
+                "key_id": "k_old", "headroom": 200
+            }})
+        return _mcp_error("unexpected tool: " + tool)
+
+    transport = httpx.MockTransport(handler)
+    async with OrbioMCPClient("https://x.example/mcp", "tok") as c:
+        c._client = httpx.AsyncClient(transport=transport, base_url=c.endpoint,
+                                       headers={"Authorization": f"Bearer {c.token}"})
+        result = await c.ensure_key(
+            current_key_id="k_old", cap_usd=200.0,
+            low_balance_threshold_usd=5.0,
+        )
+    key, action = result
+    assert action == "topped_up"
+    assert key.key_id == "k_old"
+
+
+@pytest.mark.asyncio
+async def test_ensure_key_topup_unclaimed_just_below_cap_rotates():
+    """Boundary: unclaimed == cap - 0.01 → should rotate, not topup."""
+    state = {"calls": 0}
+
+    def handler(req):
+        state["calls"] += 1
+        body = json.loads(req.content.decode())
+        tool = body.get("params", {}).get("name", "?")
+        if state["calls"] == 1:
+            return _mcp_ok({"structuredContent":
+                             {"earned": 0, "claimed": 0, "unclaimed": 199.99}})
+        if tool == "orbio_get_key_status":
+            return _mcp_ok({"structuredContent": {
+                "key_id": "k_old", "spend": 200, "headroom": 0, "remaining": 0
+            }})
+        if tool == "orbio_rotate_key":
+            return _mcp_ok({"structuredContent": {
+                "key_id": "k_new", "headroom": 0
+            }})
+        return _mcp_error("unexpected tool: " + tool)
+
+    transport = httpx.MockTransport(handler)
+    async with OrbioMCPClient("https://x.example/mcp", "tok") as c:
+        c._client = httpx.AsyncClient(transport=transport, base_url=c.endpoint,
+                                       headers={"Authorization": f"Bearer {c.token}"})
+        result = await c.ensure_key(
+            current_key_id="k_old", cap_usd=200.0,
+            low_balance_threshold_usd=5.0,
+        )
+    key, action = result
+    assert action == "rotated_depleted"
+    assert key.key_id == "k_new"
+
+
+@pytest.mark.asyncio
 async def test_mcp_error_surfaced_with_tool_name():
     async def handler(req):
         return _mcp_error("rate limit hit")
