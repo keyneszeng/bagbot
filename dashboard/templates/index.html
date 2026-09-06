@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BagBot — 你的 Agent 自己管钱</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">🪐</span>
+      <h1>BagBot</h1>
+      <span class="tagline">你的 Agent 自己管钱</span>
+    </div>
+    <div class="wallet">
+      <div class="wallet-label">{{ wallet_label }}</div>
+      <div class="wallet-addr" title="{{ wallet }}">{{ wallet[:10] }}…{{ wallet[-6:] }}</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards">
+      <div class="card">
+        <h3>未领取余额</h3>
+        <div class="big" id="bal-unclaimed">—</div>
+        <div class="unit">USD</div>
+        <div class="hint">低于 ${{ "%.2f"|format(low_balance) }} 时告警</div>
+      </div>
+
+      <div class="card">
+        <h3>累计赚取</h3>
+        <div class="big" id="bal-earned">—</div>
+        <div class="unit">USD</div>
+        <div class="hint">持币产生的所有 OpenRouter 信用</div>
+      </div>
+
+      <div class="card">
+        <h3>已兑换</h3>
+        <div class="big" id="bal-claimed">—</div>
+        <div class="unit">USD</div>
+        <div class="hint">已 claim 为 OpenRouter key</div>
+      </div>
+
+      <div class="card">
+        <h3>当前 Key 剩余</h3>
+        <div class="big" id="key-remaining">—</div>
+        <div class="unit">USD</div>
+        <div class="hint">已用 <span id="key-used">—</span></div>
+      </div>
+    </section>
+
+    <section class="status">
+      <h2>最近一次巡检</h2>
+      <div id="last-tick">
+        <div><span class="lbl">动作</span><span id="action">—</span></div>
+        <div><span class="lbl">原因</span><span id="reason">—</span></div>
+        <div><span class="lbl">Key ID</span><span id="key-id">—</span></div>
+        <div><span class="lbl">时间</span><span id="ts">—</span></div>
+      </div>
+    </section>
+
+    <section class="chart">
+      <h2>未领取余额 24h 趋势</h2>
+      <canvas id="balance-chart" width="800" height="200"></canvas>
+    </section>
+
+    <section class="events">
+      <h2>事件日志</h2>
+      <table id="events-table">
+        <thead>
+          <tr><th>时间</th><th>级别</th><th>类型</th><th>消息</th></tr>
+        </thead>
+        <tbody id="events-body"></tbody>
+      </table>
+    </section>
+
+    <section class="actions">
+      <h2>手动操作</h2>
+      <button onclick="manualClaim()">手动 Claim Key</button>
+      <button onclick="manualRotate()">手动 Rotate Key</button>
+      <button onclick="manualTopup()">手动 Top-up $20</button>
+      <span id="action-result"></span>
+    </section>
+  </main>
+
+  <footer>
+    BagBot v0.1.0 · <a href="https://github.com/keyneszeng/bagbot" target="_blank">GitHub</a>
+    · Built for <a href="https://orbio.so/build" target="_blank">Orbio Build Week</a>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
