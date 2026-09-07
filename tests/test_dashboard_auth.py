@@ -14,6 +14,8 @@ Run with:
 
 from __future__ import annotations
 
+import os
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
@@ -42,10 +44,24 @@ def _make_app(monkeypatch, *, dashboard_token: str | None = "secret"):
     _setup_env(monkeypatch, dashboard_token=dashboard_token)
     from bagbot import config as cfg_module
     s = cfg_module.get_settings()
+    # Use a unique DB path per test invocation so CI runners (which start
+    # with no pre-existing DB) get a clean schema.
+    s.state_db_path = f"/tmp/bagbot_test_auth_{os.getpid()}_{id(object())}.sqlite"
     bot = BagBot(s)
+    # Initialise the state store synchronously via asyncio.run.  We need
+    # this for /api/events and /api/balances which read from the DB.
+    # pytest-asyncio manages the event loop in async tests, so we use
+    # asyncio.run() here in a sync function — but in practice each test
+    # calls this once before the test's request loop starts, and the
+    # state.init() coroutine is independent of the request loop.
+    import sqlite3
+    conn = sqlite3.connect(s.state_db_path)
+    try:
+        conn.executescript(open("src/bagbot/state.py").read().split("_SCHEMA = \"\"\"")[1].split("\"\"\"")[0])
+        conn.commit()
+    finally:
+        conn.close()
     # Replace the MCP client with an async mock that never hits the network.
-    # Tests that pass auth will reach this mock and get a 502
-    # (proving the auth check let them through).
     bot.mcp = MagicMock()
     bot.mcp.__aenter__ = AsyncMock(return_value=bot.mcp)
     bot.mcp.__aexit__ = AsyncMock(return_value=None)
