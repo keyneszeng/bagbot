@@ -112,29 +112,49 @@ function drawChart(data) {
   ctx.fill();
 }
 
+function getDashboardToken() {
+  // Prefer localStorage; fall back to a one-time prompt.
+  let t = localStorage.getItem('bagbot_dashboard_token') || '';
+  if (!t) {
+    t = prompt('请输入 DASHBOARD_TOKEN（将保存在本机 localStorage）') || '';
+    if (t) localStorage.setItem('bagbot_dashboard_token', t);
+  }
+  return t;
+}
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const t = getDashboardToken();
+  if (t) h['X-Dashboard-Token'] = t;
+  return h;
+}
+
 async function manualClaim() {
-  const r = await fetch('/api/claim', { method: 'POST' });
+  const r = await fetch('/api/claim', { method: 'POST', headers: authHeaders() });
+  const body = await r.json().catch(() => ({}));
   $('action-result').textContent = r.ok
-    ? '✓ 已 claim key ' + (await r.json()).key_id.slice(0, 10) + '…'
-    : '✗ 失败：' + (await r.json()).detail;
+    ? '✓ 已 claim key ' + (body.key_id || '').slice(0, 10) + '…'
+    : '✗ 失败：' + (body.detail || r.status);
   setTimeout(fetchState, 1500);
 }
 async function manualRotate() {
-  const r = await fetch('/api/rotate', { method: 'POST' });
+  const r = await fetch('/api/rotate', { method: 'POST', headers: authHeaders() });
+  const body = await r.json().catch(() => ({}));
   $('action-result').textContent = r.ok
-    ? '✓ 已 rotate ' + (await r.json()).new_key_id.slice(0, 10) + '…'
-    : '✗ 失败：' + (await r.json()).detail;
+    ? '✓ 已 rotate ' + (body.new_key_id || '').slice(0, 10) + '…'
+    : '✗ 失败：' + (body.detail || r.status);
   setTimeout(fetchState, 1500);
 }
 async function manualTopup() {
   const r = await fetch('/api/topup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ amount: 20 }),
   });
+  const body = await r.json().catch(() => ({}));
   $('action-result').textContent = r.ok
-    ? '✓ 已 top-up 到 $' + (await r.json()).headroom_usd.toFixed(2)
-    : '✗ 失败：' + (await r.json()).detail;
+    ? '✓ 已 top-up 到 $' + Number(body.headroom_usd || 0).toFixed(2)
+    : '✗ 失败：' + (body.detail || r.status);
   setTimeout(fetchState, 1500);
 }
 

@@ -65,6 +65,10 @@ class DashboardCfg(BaseModel):
     enabled: bool = True
     host: str = "127.0.0.1"
     port: int = 8765
+    # Optional shared secret for mutating endpoints (claim/rotate/topup).
+    # If empty, mutation endpoints are disabled (read-only dashboard).
+    # Set DASHBOARD_TOKEN in .env for production / non-localhost use.
+    token: str = ""
 
 
 class Settings(BaseModel):
@@ -123,6 +127,7 @@ class Settings(BaseModel):
                 enabled=_env_bool("DASHBOARD_ENABLED", True),
                 host=_env("DASHBOARD_HOST", "127.0.0.1"),
                 port=_env_int("DASHBOARD_PORT", 8765),
+                token=_env("DASHBOARD_TOKEN", ""),
             ),
             notifier=NotifierCfg(
                 enabled=_env_bool("WEBHOOK_ENABLED", False)

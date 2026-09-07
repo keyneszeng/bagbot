@@ -50,50 +50,87 @@ def test_api_state_when_no_tick_yet(client):
     assert data["status"] == "no_tick_yet"
 
 
-def test_claim_without_mcp_returns_error(client):
-    """bot.mcp is not initialised via async ctx manager here, so claim
-    should fail with 500 (AttributeError) or 502 (OrbioMCPError)."""
+def test_claim_without_token_returns_403(client):
+    """Mutations are disabled when DASHBOARD_TOKEN is empty."""
     r = client.post("/api/claim")
-    assert r.status_code in (500, 502)
+    assert r.status_code == 403
+    assert "DASHBOARD_TOKEN" in r.json()["detail"]
 
 
-def test_rotate_without_current_key_returns_400(client):
-    """No saved key in state → rotate should refuse with 400."""
+def test_rotate_without_token_returns_403(client):
+    """No token → rotate must be rejected before any state check."""
     r = client.post("/api/rotate")
-    assert r.status_code == 400
-    assert "no current key" in r.json()["detail"]
+    assert r.status_code == 403
 
 
-def test_topup_without_current_key_returns_400(client):
-    """No saved key → topup should refuse with 400."""
+def test_topup_without_token_returns_403(client):
+    """No token → topup must be rejected before any state check."""
     r = client.post("/api/topup", json={"amount": 10})
-    assert r.status_code == 400
-    assert "no current key" in r.json()["detail"]
+    assert r.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_topup_validates_positive_amount(settings):
-    """Even with a current key, amount must be in (0, cap]."""
-    bot = BagBot(settings)
+async def test_mutations_require_valid_token(settings, monkeypatch):
+    """With a token configured, wrong/missing token → 401; valid token proceeds."""
+    monkeypatch.setenv("DASHBOARD_TOKEN", "secret-test-token")
+    from bagbot import config as cfg_module
+    cfg_module.reload_settings()
+    s = cfg_module.get_settings()
+    bot = BagBot(s)
     await bot.state.init()
     await bot.state.save_key(KeyRecord(
         key_id="k_test", secret="sk-test",
         headroom_usd=200.0, spend_usd=0.0,
         created_at=time.time(),
     ))
-    app = build_app(bot, settings)
+    app = build_app(bot, s)
     with TestClient(app) as client:
-        r = client.post("/api/topup", json={"amount": -5})
+        # missing
+        r = client.post("/api/rotate")
+        assert r.status_code == 401
+        # wrong
+        r = client.post("/api/rotate", headers={"X-Dashboard-Token": "wrong"})
+        assert r.status_code == 401
+        # correct — proceeds past auth (may 502 on MCP, or succeed)
+        r = client.post("/api/rotate", headers={"X-Dashboard-Token": "secret-test-token"})
+        assert r.status_code in (200, 502)
+        # Bearer style
+        r = client.post(
+            "/api/topup",
+            json={"amount": -5},
+            headers={"Authorization": "Bearer secret-test-token"},
+        )
+        assert r.status_code == 400  # auth ok, amount invalid
+
+
+@pytest.mark.asyncio
+async def test_topup_validates_positive_amount(settings, monkeypatch):
+    """Even with a current key + valid token, amount must be in (0, cap]."""
+    monkeypatch.setenv("DASHBOARD_TOKEN", "tok")
+    from bagbot import config as cfg_module
+    cfg_module.reload_settings()
+    s = cfg_module.get_settings()
+    bot = BagBot(s)
+    await bot.state.init()
+    await bot.state.save_key(KeyRecord(
+        key_id="k_test", secret="sk-test",
+        headroom_usd=200.0, spend_usd=0.0,
+        created_at=time.time(),
+    ))
+    app = build_app(bot, s)
+    headers = {"X-Dashboard-Token": "tok"}
+    with TestClient(app) as client:
+        r = client.post("/api/topup", json={"amount": -5}, headers=headers)
         assert r.status_code == 400
-        r = client.post("/api/topup", json={"amount": 500})  # > cap
+        r = client.post("/api/topup", json={"amount": 500}, headers=headers)
         assert r.status_code == 400
-        r = client.post("/api/topup", json={"amount": 0})
+        r = client.post("/api/topup", json={"amount": 0}, headers=headers)
         assert r.status_code == 400
-        r = client.post("/api/topup", json={"amount": 200})  # exactly cap
+        r = client.post("/api/topup", json={"amount": 200}, headers=headers)
         assert r.status_code in (200, 502)  # allowed (or MCP error)
-        r = client.post("/api/topup", json={"amount": 201})  # just over cap
+        r = client.post("/api/topup", json={"amount": 201}, headers=headers)
         assert r.status_code == 400
-        r = client.post("/api/topup", json={"amount": 200.01})  # just over
+        r = client.post("/api/topup", json={"amount": 200.01}, headers=headers)
         assert r.status_code == 400
 
 

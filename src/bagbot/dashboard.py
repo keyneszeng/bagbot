@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,6 +37,34 @@ class TopUpBody(BaseModel):
     amount: float
 
 
+def _require_dashboard_token(
+    settings: Settings,
+    authorization: str | None = Header(default=None),
+    x_dashboard_token: str | None = Header(default=None, alias="X-Dashboard-Token"),
+) -> None:
+    """Protect mutating endpoints.
+
+    - If DASHBOARD_TOKEN is empty → mutations are disabled (403).
+    - Accept either ``Authorization: Bearer <token>`` or ``X-Dashboard-Token: <token>``.
+    """
+    expected = (settings.dashboard.token or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Dashboard mutations disabled. "
+                "Set DASHBOARD_TOKEN in .env to enable claim/rotate/topup."
+            ),
+        )
+    provided = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    elif x_dashboard_token:
+        provided = x_dashboard_token.strip()
+    if not provided or provided != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing dashboard token")
+
+
 def build_app(bot: BagBot, settings: Settings) -> FastAPI:
     app = FastAPI(
         title="BagBot Dashboard",
@@ -48,6 +76,12 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
     static_dir = _DASHBOARD_DIR / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    def _auth(
+        authorization: str | None = Header(default=None),
+        x_dashboard_token: str | None = Header(default=None, alias="X-Dashboard-Token"),
+    ) -> None:
+        _require_dashboard_token(settings, authorization, x_dashboard_token)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
@@ -117,16 +151,17 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
         return await bot.state.recent_balances(limit=min(limit, 500))
 
     @app.post("/api/claim")
-    async def claim():
+    async def claim(_: None = Depends(_auth)):
         try:
             async with bot.mcp:
                 key = await bot.mcp.claim_key(cap_usd=settings.key_cap_usd)
         except OrbioMCPError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        # Never return the secret to the browser.
         return {"key_id": key.key_id, "headroom_usd": key.headroom_usd}
 
     @app.post("/api/rotate")
-    async def rotate():
+    async def rotate(_: None = Depends(_auth)):
         cur = await bot.state.current_key()
         if cur is None:
             raise HTTPException(status_code=400, detail="no current key to rotate")
@@ -142,7 +177,7 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
         }
 
     @app.post("/api/topup")
-    async def topup(body: TopUpBody):
+    async def topup(body: TopUpBody, _: None = Depends(_auth)):
         cur = await bot.state.current_key()
         if cur is None:
             raise HTTPException(status_code=400, detail="no current key to top up")
