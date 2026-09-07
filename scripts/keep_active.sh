@@ -24,7 +24,6 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-VENV_PY="$PROJECT_ROOT/.venv/bin/python"
 LOG="$PROJECT_ROOT/data/keep_active.log"
 DASHBOARD_URL="http://127.0.0.1:8765/api/state"
 CHECK_INTERVAL="${CHECK_INTERVAL:-300}"     # 5 min

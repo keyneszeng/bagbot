@@ -17,7 +17,6 @@ LOG_DIR="$HOME/Library/Logs"
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_PY="$PROJECT_ROOT/.venv/bin/python"
-ENTRY="$PROJECT_ROOT/src/bagbot/__main__.py"
 
 mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR" "$PROJECT_ROOT/data"
 
