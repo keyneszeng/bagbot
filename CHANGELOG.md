@@ -113,3 +113,50 @@ Features:
   event log, manual claim/rotate/topup buttons).
 - One-command macOS launchd + Linux systemd install scripts.
 - MIT licensed.
+
+## [0.1.3] — 2026-09-07
+
+### 🔒 Security fix (from upstream branch `fix/dashboard-auth-and-portable-tests`)
+
+- **Dashboard mutation endpoints now require authentication** (`src/bagbot/dashboard.py`)
+  POST `/api/claim`, `/api/rotate`, `/api/topup` were previously **unauthenticated**:
+  anyone who could reach the dashboard (default: `127.0.0.1:8765`) could claim or rotate
+  your OpenRouter keys. Now protected by `DASHBOARD_TOKEN`:
+
+  - **Empty token** (default) → mutations are **disabled** (403). Dashboard is read-only.
+  - **Set token in `.env`** → mutations require `Authorization: Bearer <token>` OR
+    `X-Dashboard-Token: <token>` header.
+  - **Wrong/missing token** with a configured expected token → 401.
+
+  Recommended: bind to `127.0.0.1` (default). If you bind to `0.0.0.0`, **you MUST
+  set a strong `DASHBOARD_TOKEN`**.
+
+- **Frontend stores token in localStorage** (`dashboard/static/app.js`)
+  `getDashboardToken()` reads from `localStorage` and prompts once if missing.
+  Applied to all 3 manual actions (claim/rotate/topup). Also fixed response parsing
+  to be safe when JSON is empty (e.g. 502 errors).
+
+- **Dashboard responses never include the secret** (`src/bagbot/dashboard.py`)
+  Claim endpoint returns only `{key_id, headroom_usd}` — never the `sk-or-v1-…` secret.
+
+- **Documented threat model** (`SECURITY.md`)
+  Two new rows: "Unauthenticated dashboard mutations" + "OpenRouter key secrets
+  stored in SQLite" (recommendation: `chmod 600` the DB; full at-rest encryption planned).
+
+### 🛠 Test improvements
+
+- **CLI error tests are now portable** (`tests/test_cli_errors.py`)
+  No more hard-coded `/Users/mac/Desktop/deepseek/bagbot` path. Uses
+  `Path(__file__).resolve().parents[1]` to find the project root at test time.
+
+- **Added 13 mutation-resistant auth tests** (`tests/test_dashboard_auth.py`)
+  Each test targets a specific decision point in the new auth logic. Designed
+  to be KILLED by `scripts/mutation_test.py`.
+
+### 📊 Test stats
+
+- Tests: 84 → **97** (+13 auth, all mutation-resistant)
+- Mutation score: **dashboard.py 100%** (was N/A — new code)
+- ruff: clean
+- mypy: clean
+
