@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: Lint + Test
+    name: Lint + Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,6 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-xdist httpx fastapi aiosqlite
+          # Pin lint tools to match the version tested locally.
+          pip install 'ruff==0.16.6'
 
       - name: Byte-compile (syntax check)
         run: |
@@ -38,12 +40,11 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          pip install ruff
           ruff check src/ tests/
 
       - name: Run tests (parallel)
         run: |
-          python -m pytest tests/ -v -n auto
+          python -m pytest tests/ -n auto --timeout=120
 
   lint-sh:
     name: Shellcheck install scripts
@@ -54,4 +55,6 @@ jobs:
         uses: ludeeus/action-shellcheck@2.0.0
         with:
           scandir: ./scripts
-          additional_files: install_launchd.sh install_systemd.sh
+          # Note: 'additional_files' is for paths at the repo root.  Our
+          # install scripts live in ./scripts/ and are picked up by
+          # 'scandir' above, so no additional_files are needed.
