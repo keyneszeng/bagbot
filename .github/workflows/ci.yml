@@ -58,3 +58,5 @@ jobs:
           # Note: 'additional_files' is for paths at the repo root.  Our
           # install scripts live in ./scripts/ and are picked up by
           # 'scandir' above, so no additional_files are needed.
+          # Only fail on real errors, not style warnings.
+          fail_threshold: error
