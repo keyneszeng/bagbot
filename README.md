@@ -102,8 +102,28 @@ bash scripts/install_systemd.sh    # Linux
 | `tests/test_*.py` | 80 tests across 8 modules (~30s, parallel) |
 | `docs/guide.zh-CN.md` | 283-line Chinese user guide |
 | `docs/BUILD_WEEK.md` | Pre-filled Build Week application text |
+| `skills/bagbot/` | **Installable Agent Skill** (SKILL.md + zero-config Python facades) |
+| `scripts/install_skill.sh` | One-command skill installer → Claude/Codex/Gemini/agents skill dirs |
 | `CHANGELOG.md` | Version history with bug-fix attribution |
 | `pyproject.toml` | ruff + mypy + pytest configuration |
+
+### 🧩 Install as an Agent Skill
+
+BagBot also ships as an [Agent Skill](skills/bagbot/SKILL.md) that any LLM
+agent (Claude Code, Codex, Gemini CLI, or a generic agent runtime) can pick
+up:
+
+```bash
+bash scripts/install_skill.sh        # symlinks into ~/.claude/skills, ~/.codex/skills, …
+# or target one: SKILL_DEST=~/.claude/skills bash scripts/install_skill.sh
+```
+
+Once installed, an agent can use the skill's zero-config facades:
+
+```bash
+PYTHONPATH=skills/bagbot/scripts python3 skills/bagbot/scripts/bagbot_cli.py decide 10.0
+# → action: claim  |  reason: no key yet; balance is enough to claim
+```
 
 ---
 
