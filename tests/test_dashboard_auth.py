@@ -48,13 +48,10 @@ def _make_app(monkeypatch, *, dashboard_token: str | None = "secret"):
     # with no pre-existing DB) get a clean schema.
     s.state_db_path = f"/tmp/bagbot_test_auth_{os.getpid()}_{id(object())}.sqlite"
     bot = BagBot(s)
-    # Initialise the state store synchronously via asyncio.run.  We need
-    # this for /api/events and /api/balances which read from the DB.
-    # pytest-asyncio manages the event loop in async tests, so we use
-    # asyncio.run() here in a sync function — but in practice each test
-    # calls this once before the test's request loop starts, and the
-    # state.init() coroutine is independent of the request loop.
-    import sqlite3
+    # Initialise the state store synchronously by executing the schema
+    # SQL directly.  This is faster than calling bot.state.init() which
+    # uses asyncio, and works around pytest-asyncio event loop conflicts.
+    # We need this for /api/events and /api/balances which read from the DB.
     conn = sqlite3.connect(s.state_db_path)
     try:
         conn.executescript(open("src/bagbot/state.py").read().split("_SCHEMA = \"\"\"")[1].split("\"\"\"")[0])
