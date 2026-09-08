@@ -56,6 +56,14 @@ def tmp_settings(tmp_path, monkeypatch):
     return cfg_module.get_settings()
 
 
+
+
+class _FakeMCP:
+    """Placeholder MCP for _execute branches that never touch the network."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
 @pytest.mark.asyncio
 async def test_first_tick_claims_when_no_key_and_balance_enough(tmp_settings):
     handlers = {
@@ -387,7 +395,7 @@ async def test_action_delete_calls_mcp_and_retires(tmp_settings):
                         type("B", (), {
                             "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 1
                         })(),
-                        None)
+                        None, bot.require_mcp())
 
     assert delete_calls["n"] == 1, "delete_key should have been called"
     cur = await bot.state.current_key()
@@ -409,7 +417,7 @@ async def test_action_alert_logs_event(tmp_settings):
         "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 0
     })()
 
-    await bot._execute(Action.ALERT, "test alert", None, fake_balance, None)
+    await bot._execute(Action.ALERT, "test alert", None, fake_balance, None, _FakeMCP())
 
     # An event row should be in the DB
     events = await bot.state.recent_events(limit=5)

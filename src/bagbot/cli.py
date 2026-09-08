@@ -129,7 +129,7 @@ async def cmd_run(args) -> int:
             )
         except (NotImplementedError, RuntimeError):
             pass
-    async with bot.mcp:
+    async with bot.require_mcp():
         await bot.run_forever()
     return 0
 
@@ -139,7 +139,7 @@ async def cmd_once(args) -> int:
     s = _settings_or_die()
     bot = BagBot(s)
     await bot.state.init()
-    async with bot.mcp:
+    async with bot.require_mcp():
         report = await bot.tick()
     print(json.dumps({
         "ts": report.ts,

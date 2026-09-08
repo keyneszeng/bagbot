@@ -154,9 +154,9 @@ async def main():
     fd, db_path = tempfile.mkstemp(suffix=".sqlite"); os.close(fd); os.unlink(db_path)
 
     # 用 Settings 但覆盖关键字段
-    os.environ.setdefault("ORBIO_WALLET", "0xDemoWallet0000...0000")
-    os.environ.setdefault("ORBIO_MCP_TOKEN", "demo-token-not-real")
-    os.environ.setdefault("ORBIO_MCP_URL", "https://demo.orbio.example/mcp")
+    os.environ["ORBIO_WALLET"] = "0xDemoWallet0000...0000"
+    os.environ["ORBIO_MCP_TOKEN"] = "demo-token-not-real"
+    os.environ["ORBIO_MCP_URL"] = "https://demo.orbio.example/mcp"
     os.environ["STATE_DB_PATH"] = db_path
     os.environ["DASHBOARD_ENABLED"] = "false"
     os.environ["WEBHOOK_ENABLED"] = "false"

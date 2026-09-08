@@ -153,8 +153,9 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
     @app.post("/api/claim")
     async def claim(_: None = Depends(_auth)):
         try:
-            async with bot.mcp:
-                key = await bot.mcp.claim_key(cap_usd=settings.key_cap_usd)
+            mcp = bot.require_mcp()
+            async with mcp:
+                key = await mcp.claim_key(cap_usd=settings.key_cap_usd)
         except OrbioMCPError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
         # Never return the secret to the browser.
@@ -166,8 +167,9 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
         if cur is None:
             raise HTTPException(status_code=400, detail="no current key to rotate")
         try:
-            async with bot.mcp:
-                new_key = await bot.mcp.rotate_key(cur.key_id)
+            mcp = bot.require_mcp()
+            async with mcp:
+                new_key = await mcp.rotate_key(cur.key_id)
         except OrbioMCPError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
         return {
@@ -187,8 +189,9 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
                 detail=f"amount must be in (0, {settings.key_cap_usd}]",
             )
         try:
-            async with bot.mcp:
-                new_key = await bot.mcp.top_up_key(cur.key_id, body.amount)
+            mcp = bot.require_mcp()
+            async with mcp:
+                new_key = await mcp.top_up_key(cur.key_id, body.amount)
         except OrbioMCPError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
         return {

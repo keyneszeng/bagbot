@@ -53,13 +53,41 @@ class BagBot:
         )
         self.state = StateStore(settings.state_db_path)
         self.notifier = Notifier(settings.notifier, lang=settings.language)
-        self.mcp = OrbioMCPClient(
-            endpoint=settings.orbio_mcp_url, token=settings.orbio_mcp_token
+        # Defer MCP client creation when no token is configured: allows
+        # zero-config runs (tests, `scripts/demo_e2e.py`) to construct the
+        # object; a real tick will raise a clear OrbioMCPError instead of
+        # failing at import time.
+        self.mcp: OrbioMCPClient | None = (
+            OrbioMCPClient(
+                endpoint=settings.orbio_mcp_url, token=settings.orbio_mcp_token
+            )
+            if settings.orbio_mcp_token
+            else None
         )
+        if self.mcp is None:
+            log.warning(
+                "ORBIO_MCP_TOKEN is empty — constructed without an MCP client. "
+                "Set the token before running real ticks."
+            )
         self._stop_event = asyncio.Event()
         self._last_tick: TickReport | None = None
         self._last_status: KeyStatus | None = None
         self._last_status_ts: float = 0.0
+
+    def require_mcp(self) -> OrbioMCPClient:
+        """Return the MCP client, raising a clear error if absent.
+
+        Callers (daemon tick, dashboard endpoints, CLI commands) that are
+        about to hit the network use this instead of touching ``self.mcp``
+        directly, so a zero-config object fails with an actionable message
+        rather than ``AttributeError: 'NoneType'``.
+        """
+        if self.mcp is None:
+            raise OrbioMCPError(
+                "mcp",
+                "ORBIO_MCP_TOKEN is empty — set it in .env to talk to Orbio MCP.",
+            )
+        return self.mcp
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -116,7 +144,8 @@ class BagBot:
     # ── One tick ─────────────────────────────────────────────────────
 
     async def tick(self) -> TickReport:
-        balance = await self.mcp.get_balance()
+        mcp = self.require_mcp()
+        balance = await mcp.get_balance()
         await self.state.record_balance(
             balance.earned_usd, balance.claimed_usd, balance.unclaimed_usd
         )
@@ -125,7 +154,7 @@ class BagBot:
         status: KeyStatus | None = None
         if current is not None:
             try:
-                status = await self.mcp.get_key_status(current.key_id)
+                status = await mcp.get_key_status(current.key_id)
             except OrbioMCPError as e:
                 log.warning("could not read key status: %s", e)
                 status = None
@@ -152,7 +181,7 @@ class BagBot:
         log.info("tick: bal=$%.2f unclaimed key=%s action=%s reason=%s",
                  balance.unclaimed_usd, snap.key_id or "-", action.value, reason)
 
-        await self._execute(action, reason, current, balance, status)
+        await self._execute(action, reason, current, balance, status, mcp)
         report = TickReport(
             ts=time.time(), balance=balance, status=status,
             action=action, reason=reason,
@@ -186,6 +215,7 @@ class BagBot:
         current: KeyRecord | None,
         balance: Balance,
         status: KeyStatus | None,
+        mcp: OrbioMCPClient,
     ) -> None:
         if action == Action.NOTHING:
             return
@@ -205,7 +235,7 @@ class BagBot:
             return
 
         if action == Action.CLAIM:
-            key = await self.mcp.claim_key(cap_usd=self.policy.key_cap_usd)
+            key = await mcp.claim_key(cap_usd=self.policy.key_cap_usd)
             await self.state.save_key(KeyRecord(
                 key_id=key.key_id, secret=key.secret,
                 headroom_usd=key.headroom_usd, spend_usd=0.0,
@@ -228,7 +258,7 @@ class BagBot:
 
         if action == Action.TOPUP:
             amount = min(self.policy.key_cap_usd, max(1.0, balance.unclaimed_usd))
-            new_key = await self.mcp.top_up_key(current.key_id, amount)
+            new_key = await mcp.top_up_key(current.key_id, amount)
             await self.state.save_key(KeyRecord(
                 key_id=new_key.key_id, secret=current.secret,
                 headroom_usd=new_key.headroom_usd,
@@ -245,7 +275,7 @@ class BagBot:
             return
 
         if action == Action.ROTATE:
-            new_key = await self.mcp.rotate_key(current.key_id)
+            new_key = await mcp.rotate_key(current.key_id)
             await self.state.retire_key(current.key_id, reason=reason)
             await self.state.save_key(KeyRecord(
                 key_id=new_key.key_id, secret=new_key.secret,
@@ -262,7 +292,7 @@ class BagBot:
             return
 
         if action == Action.DELETE:
-            await self.mcp.delete_key(current.key_id)
+            await mcp.delete_key(current.key_id)
             await self.state.retire_key(current.key_id, reason=reason)
             await self.state.log_event("error", "key_deleted", reason, {
                 "key_id": current.key_id,
@@ -290,7 +320,7 @@ async def _serve(bot: BagBot) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, bot.request_stop)
-    async with bot.mcp:
+    async with bot.require_mcp():
         await bot.run_forever()
 
 
