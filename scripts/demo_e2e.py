@@ -25,7 +25,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import httpx
 
-from bagbot.config import Settings
 from bagbot.daemon import BagBot
 from bagbot.orbio_mcp import OrbioMCPClient
 from bagbot.state import KeyRecord
@@ -222,7 +221,7 @@ async def main():
 
         try:
             report = await bot.tick()
-            print(f"│")
+            print("│")
             print(f"│ 决策 action = {report.action.value}")
             print(f"│ 原因 reason = {report.reason}")
             if report.status:
@@ -232,7 +231,7 @@ async def main():
             print(f"│ 当前 active key: {cur.key_id if cur else '(none)'}")
         except Exception as e:
             print(f"│ ✗ tick 失败: {e}")
-        print(f"└────────────────────────────────────────────")
+        print("└────────────────────────────────────────────")
 
     # 最后看 SQLite 里记了什么
     print("\n" + "=" * 64)
