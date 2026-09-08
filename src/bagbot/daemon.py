@@ -151,50 +151,51 @@ class BagBot:
 
     async def tick(self) -> TickReport:
         mcp = self.require_mcp()
-        balance = await mcp.get_balance()
-        await self.state.record_balance(
-            balance.accrued_usd, balance.claimed_usd, balance.unclaimed_usd
-        )
+        async with mcp:
+            balance = await mcp.get_balance()
+            await self.state.record_balance(
+                balance.accrued_usd, balance.claimed_usd, balance.unclaimed_usd
+            )
 
-        # Key status is per-account in the live API (takes no arguments).
-        try:
-            status = await mcp.get_key_status()
-        except OrbioMCPError as e:
-            log.warning("could not read key status: %s", e)
-            status = None
+            # Key status is per-account in the live API (takes no arguments).
+            try:
+                status = await mcp.get_key_status()
+            except OrbioMCPError as e:
+                log.warning("could not read key status: %s", e)
+                status = None
 
-        has_key = bool(status and status.has_key)
-        burn_rate = self._compute_burn_rate(balance.unclaimed_usd)
+            has_key = bool(status and status.has_key)
+            burn_rate = self._compute_burn_rate(balance.unclaimed_usd)
 
-        current = await self.state.current_key()
-        key_age_hours = (
-            (time.time() - current.created_at) / 3600.0 if current else 0.0
-        )
+            current = await self.state.current_key()
+            key_age_hours = (
+                (time.time() - current.created_at) / 3600.0 if current else 0.0
+            )
 
-        snap = Snapshot(
-            has_key=has_key,
-            key_prefix=status.prefix if status else None,
-            key_age_hours=key_age_hours,
-            spend_rate_usd_per_hour=burn_rate,
-            balance_usd=balance.unclaimed_usd,
-            accrued_usd=balance.accrued_usd,
-            last_used_at=status.last_used_at if status else None,
-            has_legacy_key=bool(status and status.legacy),
-        )
+            snap = Snapshot(
+                has_key=has_key,
+                key_prefix=status.prefix if status else None,
+                key_age_hours=key_age_hours,
+                spend_rate_usd_per_hour=burn_rate,
+                balance_usd=balance.unclaimed_usd,
+                accrued_usd=balance.accrued_usd,
+                last_used_at=status.last_used_at if status else None,
+                has_legacy_key=bool(status and status.legacy),
+            )
 
-        action, reason = decide(snap, self.policy)
-        log.info("tick: bal=$%.2f has_key=%s action=%s reason=%s",
-                 balance.unclaimed_usd, has_key, action.value, reason)
+            action, reason = decide(snap, self.policy)
+            log.info("tick: bal=$%.2f has_key=%s action=%s reason=%s",
+                     balance.unclaimed_usd, has_key, action.value, reason)
 
-        await self._execute(action, reason, current, balance, status, mcp)
-        report = TickReport(
-            ts=time.time(), balance=balance, status=status,
-            action=action, reason=reason,
-        )
-        self._last_tick = report
-        if status is not None:
-            self._last_status = status
-        return report
+            await self._execute(action, reason, current, balance, status, mcp)
+            report = TickReport(
+                ts=time.time(), balance=balance, status=status,
+                action=action, reason=reason,
+            )
+            self._last_tick = report
+            if status is not None:
+                self._last_status = status
+            return report
 
     # ── Helpers ──────────────────────────────────────────────────────
 

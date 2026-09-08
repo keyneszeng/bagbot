@@ -134,6 +134,12 @@ async def mocked(handlers: dict[str, Any]):
             from bagbot.orbio_mcp import DeleteResult
             return DeleteResult(refunded_usd=0.0)
 
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
     proxy = _MCPProxy()
     try:
         yield proxy

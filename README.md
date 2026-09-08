@@ -28,7 +28,7 @@ gateway API** (5 tools, schema verified against production 2026-09-08):
 3. **Watches** key health via `orbio_get_key_status` (per-account, no key id needed)
 4. **Rotates** on age hygiene — `orbio_create_key` again retires the old key atomically
 5. **Revokes** on leak detection — if the burn rate spikes (`orbio_revoke_key`), then recreates on the next tick
-6. **Cleans up** legacy pre-gateway OpenRouter keys with a refund (`orbio_delete_key`)
+6. **Cleans up** legacy pre-gateway Orbio keys with a refund (`orbio_delete_key`)
 7. **Alerts** when the spendable balance runs low — "hold more $ORBIO"
 8. **Reports** everything to WeChat / Feishu / Email / Webhook in **Chinese** + a local dashboard
 9. **Runs as a service** via `launchd` (macOS) / `systemd` (Linux)
