@@ -41,7 +41,7 @@ run:  ## Start the daemon (foreground).
 dashboard:  ## Start the dashboard.
 	$(VENV)/bin/python -m bagbot.cli dashboard
 
-probe:  ## Exercise all 6 MCP tools and print results.
+probe:  ## Read-only probe of the 5 live gateway tools (balance + key status).
 	$(VENV)/bin/python -m bagbot.cli probe
 
 once:  ## Run one daemon tick and exit.
