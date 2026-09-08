@@ -14,9 +14,8 @@ def test_settings_default_when_no_env(tmp_path, monkeypatch):
     s = cfg_module.get_settings()
     assert s.poll_interval_sec == 300
     assert s.low_balance_usd == 5.0
-    assert s.topup_threshold == 0.8
     assert s.rotate_max_age_hours == 168
-    assert s.key_cap_usd == 200.0
+    assert s.rotate_burst_usd_per_hour == 20.0
     assert s.dashboard.host == "127.0.0.1"
     assert s.dashboard.port == 8765
 
@@ -44,10 +43,10 @@ def test_invalid_int_falls_back_to_default(monkeypatch, tmp_path):
 
 def test_invalid_float_falls_back_to_default(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("KEY_CAP_USD", "garbage")
+    monkeypatch.setenv("ROTATE_BURST_USD_PER_HOUR", "garbage")
     cfg_module.reload_settings()
     s = cfg_module.get_settings()
-    assert s.key_cap_usd == 200.0  # default
+    assert s.rotate_burst_usd_per_hour == 20.0  # default
 
 
 def test_notifier_enabled_when_any_channel_set(monkeypatch, tmp_path):

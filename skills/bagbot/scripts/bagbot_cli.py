@@ -44,15 +44,21 @@ async def _probe() -> int:
     async with bagbot_orbio.OrbioClient.from_env() as c:
         bal = await c.get_balance()
         print("→ orbio_get_balance")
-        print(f"    unclaimed: ${bal.unclaimed_usd:.2f}  claimed: ${bal.claimed_usd:.2f}  earned: ${bal.earned_usd:.2f}")
+        print(f"    spendable: ${bal.unclaimed_usd:.2f}  "
+              f"spent: ${bal.spent_usd:.2f}  accrued: ${bal.accrued_usd:.2f}")
         print()
-        print("→ orbio_claim_key(cap=5) [probe mints + destroys a tiny key]")
-        key = await c.claim_key(cap_usd=5.0)
-        print(f"    key_id: {key.key_id}  headroom: ${key.headroom_usd:.2f}")
-        st = await c.get_key_status(key.key_id)
-        print(f"    status: spend ${st.spend_usd:.2f}  remaining ${st.remaining_usd:.2f}")
-        await c.delete_key(key.key_id)
-        print("    deleted (probe key cleaned up)")
+        print("→ orbio_get_key_status (per-account, read-only)")
+        st = await c.get_key_status()
+        if st.has_key:
+            print(f"    key: {st.prefix}  base_url: {st.base_url}")
+            print(f"    created: {st.created_at}  last_used: {st.last_used_at}")
+        else:
+            print("    no key on this account")
+        if st.legacy:
+            print(f"    legacy key pending cleanup: {st.legacy}")
+        print()
+        print("(create/revoke are NOT probed here — they change account state;")
+        print(" use `bagbot once` or the daemon to manage keys for real)")
     print()
     print("✓ probe OK")
     return 0

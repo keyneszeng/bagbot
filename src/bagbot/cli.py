@@ -74,44 +74,41 @@ def _settings_or_die():
 
 
 async def cmd_probe(args) -> int:
-    """Exercise all 6 MCP tools and print the results."""
+    """Exercise the 5 live MCP tools and print the results.
+
+    Read-only by default.  With --live it also does a real
+    create → revoke cycle (does NOT touch the legacy delete tool).
+    """
     from .orbio_mcp import OrbioMCPClient
 
     s = _settings_or_die()
+    live = bool(getattr(args, "live", False))
     async with OrbioMCPClient(s.orbio_mcp_url, s.orbio_mcp_token) as c:
         print("→ orbio_get_balance")
         bal = await c.get_balance()
         _dump("  balance:", bal.raw)
 
-        print("\n→ orbio_claim_key (cap=10 USD, dry-style probe)")
-        key = await c.claim_key(cap_usd=10.0)
-        # Print only non-secret fields of the issued key
-        _dump("  key (redacted):", {
-            "key_id": key.key_id,
-            "headroom_usd": key.headroom_usd,
-        }, redact=False)
-
         print("\n→ orbio_get_key_status")
-        st = await c.get_key_status(key.key_id)
+        st = await c.get_key_status()
         _dump("  status:", st.raw)
 
-        print("\n→ orbio_top_up_key (+5)")
-        top = await c.top_up_key(key.key_id, 5.0)
-        _dump("  top (redacted):", {
-            "key_id": top.key_id,
-            "headroom_usd": top.headroom_usd,
-        }, redact=False)
+        if live:
+            print("\n→ orbio_create_key (live; any existing key is retired)")
+            key = await c.create_key(label="bagbot-probe")
+            # The secret is shown exactly once — print only its head.
+            _dump("  key (redacted):", {
+                "prefix": key.prefix,
+                "base_url": key.base_url,
+                "replaced": key.replaced,
+                "secret_head": (key.secret[:12] + "…") if key.secret else "",
+            }, redact=False)
 
-        print("\n→ orbio_rotate_key")
-        rot = await c.rotate_key(key.key_id)
-        _dump("  rotated (redacted):", {
-            "key_id": rot.key_id,
-            "headroom_usd": rot.headroom_usd,
-        }, redact=False)
-
-        print("\n→ orbio_delete_key")
-        await c.delete_key(key.key_id)
-        print("(deleted)")
+            print("\n→ orbio_revoke_key")
+            rev = await c.revoke_key()
+            _dump("  revoke:", {"revoked": rev.revoked}, redact=False)
+            print("\n(live cycle done — key created then revoked)")
+        else:
+            print("\n(skip create/revoke — pass --live to exercise them for real)")
 
     return 0
 
@@ -144,7 +141,9 @@ async def cmd_once(args) -> int:
     print(json.dumps({
         "ts": report.ts,
         "balance_unclaimed_usd": report.balance.unclaimed_usd,
-        "key_id": report.status.key_id if report.status else None,
+        "balance_accrued_usd": report.balance.accrued_usd,
+        "has_key": report.status.has_key if report.status else False,
+        "key_prefix": report.status.prefix if report.status else None,
         "action": report.action.value,
         "reason": report.reason,
     }, indent=2, default=str))
@@ -161,7 +160,7 @@ async def cmd_status(args) -> int:
     events = await store.recent_events(limit=10)
     print("== Recent keys ==")
     for k in keys:
-        print(f"  {k.key_id[:10]}… headroom=${k.headroom_usd:.2f} "
+        print(f"  {k.key_id[:14]} headroom=${k.headroom_usd:.2f} "
               f"spend=${k.spend_usd:.2f} retired={k.retired_at}")
     print("\n== Recent balance snapshots ==")
     for b in bal:
@@ -193,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("run", help="Run the daemon (foreground)")
-    sub.add_parser("probe", help="Exercise all 6 MCP tools once and exit")
+    sub.add_parser("probe", help="Exercise the 5 live MCP tools and print results")
+    sub.choices["probe"].add_argument("--live", action="store_true",
+                                      help="also run a real create→revoke key cycle")
     sub.add_parser("once", help="Run exactly one daemon tick and exit")
     sub.add_parser("status", help="Print recent state from local DB")
     sub.add_parser("dashboard", help="Start the dashboard web UI")

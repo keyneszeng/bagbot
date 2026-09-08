@@ -1,7 +1,7 @@
 """bagbot skill — pure-function decision policy.
 
 Zero-dependency facade over the real policy engine so an agent can decide
-what to do (CLAIM / TOPUP / ROTATE / DELETE / ALERT / NOTHING) without
+what to do (CREATE / REVOKE / DELETE / ALERT / NOTHING) without
 touching any network or state.
 
     import bagbot_bootstrap            # noqa: F401

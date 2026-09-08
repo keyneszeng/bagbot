@@ -7,7 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 🐛 Bug fixes (found by full-stack integration testing)
+## [0.2.0] — 2026-09-08 · "The API that actually exists"
+
+### 🧩 Rewritten against the LIVE Orbio gateway API (breaking)
+
+Real-probe testing with a production OAuth token revealed the live
+`https://www.orbio.so/api/mcp` differs fundamentally from the starter-kit
+draft docs. BagBot now implements **what actually exists**:
+
+- **5 tools, not 6** — `orbio_get_balance`, `orbio_get_key_status`
+  (per-account, takes **no** key id), `orbio_create_key` (label ≤60 chars,
+  **no cap_usd**), `orbio_revoke_key`, `orbio_delete_key` (legacy cleanup
+  only). `claim_key` / `top_up_key` / `rotate_key` do not exist —
+  `orbio_claim_key` returns `-32601 Unknown tool`.
+- **Gateway model** — the key holds no credit; it spends the account's
+  **spendable balance** (`balance`) request-by-request. So: no key →
+  CREATE (always, keys are free); age hygiene → atomic re-CREATE
+  (`replaced: true` retires the old key); burn-rate spike → REVOKE;
+  legacy pre-gateway key → DELETE (refunded); low balance → ALERT.
+- Amounts arrive as `{"usd": float, "microUsd": "int-string"}` — new
+  `_usd()` coercion + ISO-timestamp parsing; verified against live
+  payloads (`accrued $100 / balance $0`, existing key `sk-orbio-xHtDY5`).
+- `Action` enum: CREATE / REVOKE / DELETE / ALERT / NOTHING (CLAIM/ROTATE
+  kept as aliases of CREATE for back-compat).
+
+### 🐛 Bug fixes (found by live probing)
+
+- **308 redirect loop** — httpx `base_url` + `post("")` joined a trailing
+  slash onto the endpoint and Orbio 308'd back, refusing POST. The client
+  now posts the absolute `self.endpoint`.
+- **`TypeError` on real `claimed` payload** — the draft docs' flat floats
+  are actually nested dicts; fixed by the `_usd()` coercion above.
+- **Dashboard MCP endpoints** now enter the client's async context before
+  calling `create_key`/`revoke_key` (previously raised
+  "use as async context manager").
+- **Tests no longer leak into the real network** — `test_cli_errors` used
+  to *delete* env vars and then get back-filled from the developer's
+  real `.env` (a real token!) and hit production; they now set empty
+  strings explicitly.
+
+### 🧪 Tests / demo / docs
+
+- Test suite rewritten to the gateway model: **120 tests** passing
+  (policy decision table incl. boundary/priority kills, client payload
+  parsing + retries + the 308 regression, daemon 5-scenario ticks,
+  dashboard auth incl. alias endpoints and secret-redaction).
+- `make demo` re-choreographed into 5 acts: create → healthy → rotate →
+  revoke-on-leak → low-balance alert (all against MockTransport, zero
+  credentials).
+- Skill package (`skills/bagbot`) synced: facades re-export the new
+  API, SKILL.md documents the 5-tool gateway model + one-shot secret.
+- `.env.example` dropped `TOPUP_THRESHOLD`/`KEY_CAP_USD`; README and
+  architecture diagram updated to the 5-tool reality.
+
+### 🐛 Bug fixes (found by earlier full-stack integration testing)
 
 - **`bagbot dashboard` crashed on startup** (`src/bagbot/dashboard.py`,
   `src/bagbot/cli.py`)

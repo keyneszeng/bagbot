@@ -102,12 +102,12 @@ def gen_constant_mutations(tree: ast.Module) -> Iterable[Mutation]:
             yield _new_mutation(node.lineno, "0", "1", "0 → 1")
         elif node.value == 1 and isinstance(node.value, int):
             yield _new_mutation(node.lineno, "1", "0", "1 → 0")
-        elif node.value == 200.0:
-            yield _new_mutation(node.lineno, "200.0", "100.0", "200.0 → 100.0")
+        elif node.value == 100.0:
+            yield _new_mutation(node.lineno, "100.0", "50.0", "100.0 → 50.0")
         elif node.value == 5.0:
             yield _new_mutation(node.lineno, "5.0", "10.0", "5.0 → 10.0")
-        elif node.value == 0.8:
-            yield _new_mutation(node.lineno, "0.8", "0.5", "0.8 → 0.5")
+        elif node.value == 168:
+            yield _new_mutation(node.lineno, "168", "84", "168 → 84")
 
 
 def collect_mutations(targets: List[Path]) -> List[Mutation]:

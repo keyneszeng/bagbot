@@ -97,3 +97,29 @@ async def test_retired_keys_still_in_recent(store: StateStore):
     keys = await store.recent_keys(limit=10)
     assert len(keys) == 2
     assert {k.key_id for k in keys} == {"k_a", "k_b"}
+
+
+@pytest.mark.asyncio
+async def test_retire_all_active_bulk_retires(store: StateStore):
+    """retire_all_active retires every active key in one call (used by the
+    dashboard's manual create — gateway keys replace atomically)."""
+    from datetime import datetime, timezone
+    for kid in ("k_a", "k_b", "k_c"):
+        await store.save_key(KeyRecord(
+            key_id=kid, secret="s", headroom_usd=0.0, spend_usd=0.0,
+            created_at=datetime.now(timezone.utc).timestamp()))
+    assert (await store.current_key()) is not None
+
+    n = await store.retire_all_active(reason="bulk test")
+    assert n == 3
+    assert (await store.current_key()) is None
+    keys = await store.recent_keys(limit=10)
+    assert len(keys) == 3
+    assert all(k.retired_at is not None for k in keys)
+    assert all(k.retire_reason == "bulk test" for k in keys)
+
+
+@pytest.mark.asyncio
+async def test_retire_all_active_when_empty(store: StateStore):
+    """No active keys → returns 0, no error."""
+    assert await store.retire_all_active(reason="nothing to do") == 0

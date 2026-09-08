@@ -1,13 +1,19 @@
 """Core BagBot daemon — the 7×24 event loop.
 
-Lifecycle per tick (every POLL_INTERVAL_SEC seconds):
-  1.  Read balance (orbio_get_balance)
-  2.  Read current key status (orbio_get_key_status), if any
-  3.  Compute spend rate from the last 2-3 balance snapshots
-  4.  Decide an action (policy.decide)
-  5.  Execute the action
-  6.  Persist state + emit notification
-  7.  Sleep
+Lifecycle per tick (every POLL_INTERVAL_SEC seconds), against the **live
+Orbio gateway API** (5 tools, verified 2026-09-08):
+
+  1.  Read balance (orbio_get_balance)     — balance IS the quota
+  2.  Read key status (orbio_get_key_status) — per-account, no args
+  3.  Compute spend rate from balance history
+  4.  Decide (policy.decide): CREATE / REVOKE / DELETE / ALERT / NOTHING
+  5.  Execute + persist to SQLite + notify
+  6.  Sleep
+
+Gateway model: the key never holds credit — the gateway draws on the
+account balance request-by-request.  So there is no "top-up", and
+"rotation" is just ``orbio_create_key`` again (old key retired atomically,
+``replaced: true``).
 """
 
 from __future__ import annotations
@@ -46,16 +52,14 @@ class BagBot:
         self.cfg = settings
         self.policy = PolicyConfig(
             low_balance_usd=settings.low_balance_usd,
-            topup_threshold=settings.topup_threshold,
             rotate_max_age_hours=settings.rotate_max_age_hours,
-            rotate_burst_usd_per_hour=settings.rotate_burst_usd_per_hour,
-            key_cap_usd=settings.key_cap_usd,
+            leak_rate_usd_per_hour=settings.rotate_burst_usd_per_hour,
         )
         self.state = StateStore(settings.state_db_path)
         self.notifier = Notifier(settings.notifier, lang=settings.language)
         # Defer MCP client creation when no token is configured: allows
         # zero-config runs (tests, `scripts/demo_e2e.py`) to construct the
-        # object; a real tick will raise a clear OrbioMCPError instead of
+        # object; a real tick raises a clear OrbioMCPError instead of
         # failing at import time.
         self.mcp: OrbioMCPClient | None = (
             OrbioMCPClient(
@@ -72,7 +76,9 @@ class BagBot:
         self._stop_event = asyncio.Event()
         self._last_tick: TickReport | None = None
         self._last_status: KeyStatus | None = None
-        self._last_status_ts: float = 0.0
+        # Burn-rate sampling: previous spendable balance + timestamp.
+        self._last_balance_usd: float | None = None
+        self._last_balance_ts: float = 0.0
 
     def require_mcp(self) -> OrbioMCPClient:
         """Return the MCP client, raising a clear error if absent.
@@ -147,39 +153,38 @@ class BagBot:
         mcp = self.require_mcp()
         balance = await mcp.get_balance()
         await self.state.record_balance(
-            balance.earned_usd, balance.claimed_usd, balance.unclaimed_usd
+            balance.accrued_usd, balance.claimed_usd, balance.unclaimed_usd
         )
 
+        # Key status is per-account in the live API (takes no arguments).
+        try:
+            status = await mcp.get_key_status()
+        except OrbioMCPError as e:
+            log.warning("could not read key status: %s", e)
+            status = None
+
+        has_key = bool(status and status.has_key)
+        burn_rate = self._compute_burn_rate(balance.unclaimed_usd)
+
         current = await self.state.current_key()
-        status: KeyStatus | None = None
-        if current is not None:
-            try:
-                status = await mcp.get_key_status(current.key_id)
-            except OrbioMCPError as e:
-                log.warning("could not read key status: %s", e)
-                status = None
+        key_age_hours = (
+            (time.time() - current.created_at) / 3600.0 if current else 0.0
+        )
 
-        # Burn rate from history.
-        burn_rate = self._compute_burn_rate(status)
-
-        # Use sentinel 0.0 for everything key-related if we couldn't read status.
         snap = Snapshot(
-            has_key=current is not None,
-            key_id=current.key_id if current else None,
-            key_age_hours=(
-                (time.time() - current.created_at) / 3600.0 if current else 0.0
-            ),
+            has_key=has_key,
+            key_prefix=status.prefix if status else None,
+            key_age_hours=key_age_hours,
             spend_rate_usd_per_hour=burn_rate,
-            key_used_fraction=status.used_fraction if status is not None else 0.0,
-            key_remaining_usd=status.remaining_usd if status is not None else 0.0,
-            unclaimed_usd=balance.unclaimed_usd,
-            earned_usd=balance.earned_usd,
-            claimed_usd=balance.claimed_usd,
+            balance_usd=balance.unclaimed_usd,
+            accrued_usd=balance.accrued_usd,
+            last_used_at=status.last_used_at if status else None,
+            has_legacy_key=bool(status and status.legacy),
         )
 
         action, reason = decide(snap, self.policy)
-        log.info("tick: bal=$%.2f unclaimed key=%s action=%s reason=%s",
-                 balance.unclaimed_usd, snap.key_id or "-", action.value, reason)
+        log.info("tick: bal=$%.2f has_key=%s action=%s reason=%s",
+                 balance.unclaimed_usd, has_key, action.value, reason)
 
         await self._execute(action, reason, current, balance, status, mcp)
         report = TickReport(
@@ -189,23 +194,29 @@ class BagBot:
         self._last_tick = report
         if status is not None:
             self._last_status = status
-            self._last_status_ts = time.time()
         return report
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    def _compute_burn_rate(self, status: KeyStatus | None) -> float:
-        """Estimate USD/hour of key spend.
+    def _compute_burn_rate(self, balance_usd: float) -> float:
+        """Estimate USD/hour of spend from consecutive balance samples.
 
-        For now: if we have a previous status sample, divide its spend delta
-        by the elapsed wall time.  Returns 0.0 if not enough data.
+        The gateway draws the account balance, so the balance curve IS the
+        spend curve.  Returns 0.0 until there are two samples; balance
+        increases (accruals) count as zero burn.
         """
-        if status is None or self._last_status is None:
+        now = time.time()
+        prev, prev_ts = self._last_balance_usd, self._last_balance_ts
+        self._last_balance_usd = balance_usd
+        self._last_balance_ts = now
+        if prev is None or prev_ts <= 0:
             return 0.0
-        dt = time.time() - self._last_status_ts
+        dt = now - prev_ts
         if dt <= 0:
             return 0.0
-        delta = max(0.0, status.spend_usd - self._last_status.spend_usd)
+        delta = prev - balance_usd  # positive = spending
+        if delta <= 0:
+            return 0.0
         return (delta / dt) * 3600.0
 
     async def _execute(
@@ -220,86 +231,63 @@ class BagBot:
         if action == Action.NOTHING:
             return
 
-        # ALERT is special: it can fire even when there's no current key
-        # (the policy emits ALERT when there is no key and balance is low).
-        # It must run BEFORE the "current is None" guard below.
+        # ALERT can fire alongside a healthy key — it must run before the
+        # "no current key" guard.
         if action == Action.ALERT:
-            await self.state.log_event("warn", "alert", reason, {
-                "unclaimed_usd": balance.unclaimed_usd,
+            await self.state.log_event("warn", "balance_low", reason, {
+                "balance_usd": balance.unclaimed_usd,
             })
             await self.notifier.notify(
-                "warn", "balance_low", "未领取余额偏低", reason,
-                {"unclaimed": balance.unclaimed_usd,
+                "warn", "balance_low", "可花余额偏低", reason,
+                {"balance": balance.unclaimed_usd,
                  "threshold": self.policy.low_balance_usd},
             )
             return
 
-        if action == Action.CLAIM:
-            key = await mcp.claim_key(cap_usd=self.policy.key_cap_usd)
+        if action == Action.CREATE:
+            key = await mcp.create_key(label=self.cfg.wallet_label)
+            # Rotate bookkeeping: retire the old record when the server
+            # says it replaced one.
+            if current is not None and key.replaced:
+                await self.state.retire_key(current.key_id, reason=reason)
             await self.state.save_key(KeyRecord(
-                key_id=key.key_id, secret=key.secret,
-                headroom_usd=key.headroom_usd, spend_usd=0.0,
+                key_id=key.prefix,           # prefix is the durable identity
+                secret=key.secret,           # shown exactly once — store now
+                headroom_usd=0.0,            # gateway model: no per-key cap
+                spend_usd=0.0,
                 created_at=time.time(),
             ))
-            await self.state.log_event("info", "key_claimed", reason, {
-                "key_id": key.key_id, "headroom_usd": key.headroom_usd,
+            kind = "key_rotated" if key.replaced else "key_created"
+            title = "已轮换 key" if key.replaced else "已创建新 key"
+            await self.state.log_event("info", kind, reason, {
+                "prefix": key.prefix, "replaced": key.replaced,
+                "base_url": key.base_url,
             })
             await self.notifier.notify(
-                "success", "key_claimed", "已领取新 key",
-                reason,
-                {"headroom": key.headroom_usd},
+                "success" if not key.replaced else "info",
+                kind, title, reason,
+                {"prefix": key.prefix, "replaced": key.replaced},
             )
             return
 
-        # All other actions (TOPUP, ROTATE, DELETE) need a current key.
-        if current is None:
-            log.warning("action %s requested but no current key", action.value)
-            return
-
-        if action == Action.TOPUP:
-            amount = min(self.policy.key_cap_usd, max(1.0, balance.unclaimed_usd))
-            new_key = await mcp.top_up_key(current.key_id, amount)
-            await self.state.save_key(KeyRecord(
-                key_id=new_key.key_id, secret=current.secret,
-                headroom_usd=new_key.headroom_usd,
-                spend_usd=new_key.spend_usd,
-                created_at=current.created_at,
-            ))
-            await self.state.log_event("info", "key_topped_up", reason, {
-                "amount_usd": amount, "key_id": current.key_id,
-            })
+        if action == Action.REVOKE:
+            await mcp.revoke_key()
+            if current is not None:
+                await self.state.retire_key(current.key_id, reason=reason)
+            await self.state.log_event("error", "key_revoked", reason, {})
             await self.notifier.notify(
-                "info", "key_topped_up", "已为 key 充值", reason,
-                {"amount": amount},
-            )
-            return
-
-        if action == Action.ROTATE:
-            new_key = await mcp.rotate_key(current.key_id)
-            await self.state.retire_key(current.key_id, reason=reason)
-            await self.state.save_key(KeyRecord(
-                key_id=new_key.key_id, secret=new_key.secret,
-                headroom_usd=new_key.headroom_usd, spend_usd=0.0,
-                created_at=time.time(),
-            ))
-            await self.state.log_event("warn", "key_rotated", reason, {
-                "old_key_id": current.key_id, "new_key_id": new_key.key_id,
-            })
-            await self.notifier.notify(
-                "warn", "key_rotated", "已轮换 key", reason,
-                {"reason": reason},
+                "error", "key_revoked", "已撤销 key（疑似泄露）", reason, {}
             )
             return
 
         if action == Action.DELETE:
-            await mcp.delete_key(current.key_id)
-            await self.state.retire_key(current.key_id, reason=reason)
-            await self.state.log_event("error", "key_deleted", reason, {
-                "key_id": current.key_id,
+            result = await mcp.delete_key()
+            await self.state.log_event("warn", "legacy_key_deleted", reason, {
+                "refunded_usd": result.refunded_usd,
             })
             await self.notifier.notify(
-                "error", "key_deleted", "已停用 key", reason,
-                {"reason": reason},
+                "warn", "legacy_key_deleted", "已清理旧版 key", reason,
+                {"refunded_usd": result.refunded_usd},
             )
             return
 

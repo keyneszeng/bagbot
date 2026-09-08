@@ -85,12 +85,10 @@ class Settings(BaseModel):
     # Policy
     poll_interval_sec: int = Field(default=300, alias="POLL_INTERVAL_SEC")
     low_balance_usd: float = Field(default=5.0, alias="LOW_BALANCE_USD")
-    topup_threshold: float = Field(default=0.8, alias="TOPUP_THRESHOLD")
     rotate_max_age_hours: int = Field(default=168, alias="ROTATE_MAX_AGE_HOURS")
     rotate_burst_usd_per_hour: float = Field(
         default=20.0, alias="ROTATE_BURST_USD_PER_HOUR"
     )
-    key_cap_usd: float = Field(default=200.0, alias="KEY_CAP_USD")
 
     # State
     state_db_path: str = Field(default="./data/bagbot.sqlite", alias="STATE_DB_PATH")
@@ -116,10 +114,8 @@ class Settings(BaseModel):
             ORBIO_MCP_TOKEN=_env("ORBIO_MCP_TOKEN"),
             POLL_INTERVAL_SEC=_env_int("POLL_INTERVAL_SEC", 300),
             LOW_BALANCE_USD=_env_float("LOW_BALANCE_USD", 5.0),
-            TOPUP_THRESHOLD=_env_float("TOPUP_THRESHOLD", 0.8),
             ROTATE_MAX_AGE_HOURS=_env_int("ROTATE_MAX_AGE_HOURS", 168),
             ROTATE_BURST_USD_PER_HOUR=_env_float("ROTATE_BURST_USD_PER_HOUR", 20.0),
-            KEY_CAP_USD=_env_float("KEY_CAP_USD", 200.0),
             STATE_DB_PATH=_env("STATE_DB_PATH", "./data/bagbot.sqlite"),
             LOG_FILE=_env("LOG_FILE", "./data/bagbot.log"),
             LOG_LEVEL=_env("LOG_LEVEL", "INFO"),

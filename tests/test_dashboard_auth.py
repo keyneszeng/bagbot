@@ -62,10 +62,9 @@ def _make_app(monkeypatch, *, dashboard_token: str | None = "secret"):
     bot.mcp = MagicMock()
     bot.mcp.__aenter__ = AsyncMock(return_value=bot.mcp)
     bot.mcp.__aexit__ = AsyncMock(return_value=None)
-    err = OrbioMCPError("claim_key", "mocked: should not reach MCP")
-    bot.mcp.claim_key = AsyncMock(side_effect=err)
-    bot.mcp.rotate_key = AsyncMock(side_effect=err)
-    bot.mcp.top_up_key = AsyncMock(side_effect=err)
+    err = OrbioMCPError("orbio_create_key", "mocked: should not reach MCP")
+    bot.mcp.create_key = AsyncMock(side_effect=err)
+    bot.mcp.revoke_key = AsyncMock(side_effect=err)
     return build_app(bot, s)
 
 
@@ -88,10 +87,11 @@ def test_empty_token_disables_rotate(monkeypatch):
         assert r.status_code == 403
 
 
-def test_empty_token_disables_topup(monkeypatch):
+def test_empty_token_disables_revoke(monkeypatch):
+    """No token in env → revoke is blocked with 403."""
     app = _make_app(monkeypatch, dashboard_token=None)
     with TestClient(app) as client:
-        r = client.post("/api/topup", json={"amount": 10})
+        r = client.post("/api/revoke")
         assert r.status_code == 403
 
 

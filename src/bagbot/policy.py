@@ -1,6 +1,22 @@
 """Pluggable decision policy for the daemon.
 
 Pure functions over a snapshot of state → (action, reason).
+
+Actions map onto the **live Orbio gateway API** (verified 2026-09-08):
+
+  CREATE  → orbio_create_key   (mint key; also the rotation / leak-response)
+  REVOKE  → orbio_revoke_key   (stop key; balance untouched)
+  DELETE  → orbio_delete_key   (legacy pre-gateway key cleanup only)
+  ALERT   → notify only
+
+Gateway model — why the rules are simple:
+  * the key holds **no credit**: it spends the account balance directly, so
+    there is no top-up and no per-key cap/usage fraction;
+  * creating a key costs nothing: no key → create immediately;
+  * rotation is create-again (old key retired atomically, replaced=true);
+  * the two real risks: a leaked key burning the bag (burn-rate guard),
+    and a long-lived secret (age hygiene) — plus "balance low", which just
+    alerts the human to hold more $ORBIO.
 """
 
 from __future__ import annotations
@@ -12,24 +28,27 @@ from enum import Enum
 
 class Action(str, Enum):
     NOTHING = "nothing"
-    CLAIM = "claim"
-    TOPUP = "topup"
-    ROTATE = "rotate"
-    DELETE = "delete"
+    CREATE = "create"      # orbio_create_key (mint / rotate / leak-replace)
+    REVOKE = "revoke"      # orbio_revoke_key
+    DELETE = "delete"      # orbio_delete_key (legacy cleanup)
     ALERT = "alert"
+
+
+# Backwards-compat aliases for older callers/tests.
+CLAIM = Action.CREATE
+ROTATE = Action.CREATE
 
 
 @dataclass
 class Snapshot:
     has_key: bool
-    key_id: str | None
+    key_prefix: str | None          # visible head, e.g. sk-orbio-ab12
     key_age_hours: float
-    spend_rate_usd_per_hour: float
-    key_used_fraction: float        # 0..1
-    key_remaining_usd: float
-    unclaimed_usd: float
-    earned_usd: float
-    claimed_usd: float
+    spend_rate_usd_per_hour: float  # measured from balance history
+    balance_usd: float              # spendable now (the quota)
+    accrued_usd: float              # lifetime earned
+    last_used_at: float | None      # epoch; None = never used
+    has_legacy_key: bool = False    # pre-gateway OpenRouter key pending cleanup
     ts: float = 0.0
 
     def __post_init__(self):
@@ -39,51 +58,42 @@ class Snapshot:
 
 @dataclass
 class PolicyConfig:
-    low_balance_usd: float = 5.0
-    topup_threshold: float = 0.8
-    rotate_max_age_hours: int = 168   # 7 days
-    rotate_burst_usd_per_hour: float = 20.0
-    key_cap_usd: float = 200.0
+    low_balance_usd: float = 5.0           # balance below this → alert
+    rotate_max_age_hours: int = 168        # 7 days; 0 disables
+    leak_rate_usd_per_hour: float = 100.0  # burn above this → revoke (leak)
 
 
 def decide(snap: Snapshot, cfg: PolicyConfig) -> tuple[Action, str]:
     """Pure decision function. Easy to unit-test."""
 
-    # No key yet.
+    # ── Leak guard first: a burning key outranks everything ──────────
+    if snap.has_key and snap.spend_rate_usd_per_hour >= cfg.leak_rate_usd_per_hour:
+        return Action.REVOKE, (
+            f"burn rate ${snap.spend_rate_usd_per_hour:.2f}/h ≥ "
+            f"leak threshold ${cfg.leak_rate_usd_per_hour:.2f}/h; revoking"
+        )
+
+    # ── No key → create one (costs nothing in gateway model) ─────────
     if not snap.has_key:
-        if snap.unclaimed_usd >= cfg.low_balance_usd:
-            return Action.CLAIM, "no key yet; balance is enough to claim"
-        return Action.ALERT, (
-            f"no key and unclaimed ${snap.unclaimed_usd:.2f} < "
-            f"threshold ${cfg.low_balance_usd:.2f}"
-        )
+        return Action.CREATE, "no key yet; creating (key is free, spends balance)"
 
-    # Key too old.
+    # ── Hygiene: rotate on age via atomic re-create ──────────────────
     if cfg.rotate_max_age_hours > 0 and snap.key_age_hours >= cfg.rotate_max_age_hours:
-        return Action.ROTATE, (
-            f"key age {snap.key_age_hours:.1f}h ≥ {cfg.rotate_max_age_hours}h cap"
+        return Action.CREATE, (
+            f"key age {snap.key_age_hours:.1f}h ≥ {cfg.rotate_max_age_hours}h cap; "
+            "recreating (old key retired atomically)"
         )
 
-    # Burn rate suspicious.
-    if snap.spend_rate_usd_per_hour >= cfg.rotate_burst_usd_per_hour:
-        return Action.ROTATE, (
-            f"key burn rate ${snap.spend_rate_usd_per_hour:.2f}/h ≥ "
-            f"${cfg.rotate_burst_usd_per_hour:.2f}/h cap"
+    # ── Legacy pre-gateway key pending cleanup ───────────────────────
+    if snap.has_legacy_key:
+        return Action.DELETE, "legacy pre-gateway key present; deleting refunds it"
+
+    # ── Balance low: alert (the key is fine; the bag is running dry) ─
+    if snap.balance_usd < cfg.low_balance_usd:
+        return Action.ALERT, (
+            f"balance ${snap.balance_usd:.2f} < alert threshold "
+            f"${cfg.low_balance_usd:.2f}"
         )
 
-    # Headroom running low → top up.
-    if snap.key_used_fraction >= cfg.topup_threshold:
-        if snap.unclaimed_usd >= 1.0:
-            return Action.TOPUP, (
-                f"key used {snap.key_used_fraction:.0%} ≥ "
-                f"topup threshold {cfg.topup_threshold:.0%}"
-            )
-        return Action.ROTATE, (
-            "key used past topup threshold but no balance to top up; rotating"
-        )
-
-    # Headroom fully drained (race).
-    if snap.key_remaining_usd <= 0:
-        return Action.ROTATE, "key remaining ≤ 0"
-
+    # Healthy: the gateway auto-draws the balance; nothing to do.
     return Action.NOTHING, "healthy"

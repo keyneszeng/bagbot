@@ -105,6 +105,8 @@ section h2 {
 
 #action { font-weight: 600; }
 .action-claim { color: var(--good); }
+.action-create { color: var(--good); }
+.action-revoke { color: var(--bad); }
 .action-rotate { color: var(--warn); }
 .action-topup { color: var(--accent-2); }
 .action-nothing { color: var(--text-dim); }
@@ -166,3 +168,5 @@ footer {
 }
 footer a { color: var(--accent-2); text-decoration: none; }
 footer a:hover { text-decoration: underline; }
+
+.actions .danger { border-color: var(--bad); color: var(--bad); }

@@ -1,20 +1,27 @@
-"""Orbio MCP client — async wrapper around the 6 tools.
+"""Orbio MCP client — async wrapper around the live Orbio gateway API.
 
-Spec source: https://orbio.so/mcp
-Tools:
-  orbio_get_balance      — return unclaimed credits (USD)
-  orbio_claim_key        — mint an OpenRouter key, up to KEY_CAP_USD
-  orbio_get_key_status   — live key spend (from OpenRouter)
-  orbio_top_up_key       — move balance onto existing key (no secret change)
-  orbio_rotate_key       — fresh secret, same credits, old key dies
-  orbio_delete_key       — kill key, unspent returns to balance
+Spec source: https://orbio.so/mcp  (live schema verified 2026-09-08 via
+``tools/list`` against https://www.orbio.so/api/mcp)
 
-The MCP server is exposed by Orbio as a remote HTTP endpoint using
-Streamable HTTP transport.  We use a tiny JSON-RPC over HTTP wrapper
-compatible with the MCP "tools/call" shape.  If the official transport
-differs in your environment, point ORBIO_MCP_URL at a local proxy and
-keep the same payload shape — only `BaseMCPClient._request` would need
-to change.
+The real API exposes **5 tools** (not the 6 from the early draft docs) and
+works on a *gateway* model:
+
+  orbio_get_balance    — accrued / purchased / spent / claimed / balance (USD)
+  orbio_get_key_status — hasKey, prefix, createdAt, lastUsedAt, baseUrl, legacy
+  orbio_create_key     — mint the key (secret shown once); replaces an
+                         existing key atomically (this is the "rotate")
+  orbio_revoke_key     — stop the key; balance untouched, nothing refunded
+  orbio_delete_key     — legacy pre-gateway OpenRouter key cleanup + refund
+
+Key model differences from the draft:
+  * the key has **no cap** — it spends the live balance, request by request;
+  * there is **no top-up** — the gateway draws on the account balance;
+  * "rotation" is just ``orbio_create_key`` again (old key retired in the
+    same statement, ``replaced: true``);
+  * ``unclaimed`` (spendable) = ``balance.usd`` — the balance IS the quota.
+
+Response amounts arrive as ``{"usd": float, "microUsd": "int-str"}`` dicts;
+``_usd`` coerces either shape (and bare numbers) into float USD.
 """
 
 from __future__ import annotations
@@ -33,72 +40,120 @@ log = logging.getLogger("bagbot.orbio_mcp")
 
 # ── Typed responses ────────────────────────────────────────────────────────
 
+def _usd(value: Any) -> float:
+    """Coerce an Orbio amount (dict/number/None) into float USD."""
+    if isinstance(value, dict):
+        usd = value.get("usd")
+        if usd is not None:
+            return float(usd)
+        micro = value.get("microUsd")
+        if micro is not None:
+            return float(micro) / 1_000_000.0
+        return 0.0
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _ts(value: Any) -> float | None:
+    """Parse an ISO timestamp (or epoch) into epoch seconds; None if absent."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class Balance:
-    """Result of orbio_get_balance."""
-    earned_usd: float
-    claimed_usd: float
-    unclaimed_usd: float
-    currency: str = "USD"
+    """Result of orbio_get_balance (live schema)."""
+
+    accrued_usd: float      # lifetime credits earned from holding $ORBIO
+    purchased_usd: float    # credits bought outright
+    spent_usd: float        # spent through the gateway
+    claimed_usd: float      # (legacy) claimed onto a provisioned key
+    unclaimed_usd: float    # spendable now == balance.usd
+    wallets: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, p: dict[str, Any]) -> Balance:
         return cls(
-            earned_usd=float(p.get("earned", 0.0)),
-            claimed_usd=float(p.get("claimed", 0.0)),
-            unclaimed_usd=float(p.get("unclaimed", 0.0)),
-            currency=p.get("currency", "USD"),
+            accrued_usd=_usd(p.get("accrued", 0.0)),
+            purchased_usd=_usd(p.get("purchased", 0.0)),
+            spent_usd=_usd(p.get("spent", 0.0)),
+            claimed_usd=_usd(p.get("claimed", 0.0)),
+            unclaimed_usd=_usd(p.get("balance", 0.0)),
+            wallets=list(p.get("wallets", []) or []),
+            raw=p,
+        )
+
+
+@dataclass
+class KeyStatus:
+    """Result of orbio_get_key_status (live schema)."""
+
+    has_key: bool
+    prefix: str | None = None        # visible head, e.g. sk-orbio-ab12
+    created_at: float | None = None  # epoch seconds
+    last_used_at: float | None = None
+    base_url: str | None = None      # OpenAI-compatible endpoint to pair with
+    legacy: dict[str, Any] | None = None  # pre-gateway OpenRouter key, if any
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, p: dict[str, Any]) -> KeyStatus:
+        return cls(
+            has_key=bool(p.get("hasKey", False)),
+            prefix=p.get("prefix"),
+            created_at=_ts(p.get("createdAt")),
+            last_used_at=_ts(p.get("lastUsedAt")),
+            base_url=p.get("baseUrl"),
+            legacy=p.get("legacy"),
             raw=p,
         )
 
 
 @dataclass
 class Key:
-    """An issued OpenRouter key."""
-    key_id: str
-    secret: str            # the sk-or-v1-… secret
-    headroom_usd: float    # how much can still be spent on this key
-    spend_usd: float = 0.0
+    """Result of orbio_create_key.  The secret is shown exactly once."""
+
+    secret: str                      # full sk-orbio-… secret (store immediately)
+    prefix: str = ""                 # visible head for display/identification
+    base_url: str = ""               # OpenAI-compatible base URL
+    replaced: bool = False           # True when an old key was retired
     created_at: float = field(default_factory=time.time)
     raw: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def used_fraction(self) -> float:
-        cap = self.headroom_usd + self.spend_usd
-        if cap <= 0:
-            return 0.0
-        return self.spend_usd / cap
+
+@dataclass
+class RevokeResult:
+    """Result of orbio_revoke_key."""
+
+    revoked: bool                    # False when there was no key to revoke
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
-class KeyStatus:
-    """Live key status read from OpenRouter via the MCP."""
-    key_id: str
-    spend_usd: float
-    headroom_usd: float
-    remaining_usd: float
-    last_used_at: float | None = None
+class DeleteResult:
+    """Result of orbio_delete_key (legacy cleanup)."""
+
+    refunded_usd: float
+    label: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def used_fraction(self) -> float:
-        """Fraction of the original cap that has been spent."""
-        cap = self.headroom_usd + self.spend_usd
-        if cap <= 0:
-            return 0.0
-        return self.spend_usd / cap
-
     @classmethod
-    def from_payload(cls, p: dict[str, Any]) -> KeyStatus:
-        spend = float(p.get("spend", 0.0))
-        headroom = float(p.get("headroom", 0.0))
+    def from_payload(cls, p: dict[str, Any]) -> DeleteResult:
         return cls(
-            key_id=p.get("key_id", ""),
-            spend_usd=spend,
-            headroom_usd=headroom,
-            remaining_usd=float(p.get("remaining", headroom - spend)),
-            last_used_at=p.get("last_used_at"),
+            refunded_usd=_usd(p.get("refunded", 0.0)),
+            label=p.get("label"),
             raw=p,
         )
 
@@ -116,7 +171,7 @@ class OrbioMCPError(RuntimeError):
 # ── Client ────────────────────────────────────────────────────────────────
 
 class OrbioMCPClient:
-    """Async client for the 6 Orbio MCP tools.
+    """Async client for the live Orbio gateway MCP (5 tools).
 
     Backed by httpx; safe to share across coroutines.
     """
@@ -145,7 +200,7 @@ class OrbioMCPClient:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
-                "Accept": "application/json",
+                "Accept": "application/json, text/event-stream",
             },
         )
         return self
@@ -158,26 +213,22 @@ class OrbioMCPClient:
     # ── Low-level transport ────────────────────────────────────────────
 
     async def _call(self, tool: str, arguments: dict | None = None) -> dict:
-        """Issue a JSON-RPC 2.0 tools/call request.
-
-        Most MCP servers accept POST {endpoint} with a body of:
-          {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-           "params": {"name": "<tool>", "arguments": {...}}}
-        We retry on transient errors (5xx, network) and respect
-        server-supplied retry_after hints.
-        """
+        """Issue a JSON-RPC 2.0 tools/call request with retries."""
         assert self._client is not None, "use as async context manager"
-        arguments = arguments or {}
         body = {
             "jsonrpc": "2.0",
             "id": int(time.time() * 1000) % 10_000,
             "method": "tools/call",
-            "params": {"name": tool, "arguments": arguments},
+            "params": {"name": tool, "arguments": arguments or {}},
         }
         last_err: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                resp = await self._client.post("", json=body)
+                # POST the absolute endpoint URL. Using post("") with
+                # base_url makes httpx join to "<base>/" (trailing slash),
+                # which Orbio 308-redirects back to the slash-less path —
+                # and httpx refuses to re-POST across redirects.
+                resp = await self._client.post(self.endpoint, json=body)
                 if resp.status_code == 429:
                     retry_after = float(resp.headers.get("retry-after", "1"))
                     log.warning("rate-limited on %s, sleeping %.1fs", tool, retry_after)
@@ -189,16 +240,12 @@ class OrbioMCPClient:
                 data = resp.json()
                 if "error" in data:
                     raise OrbioMCPError(tool, str(data["error"]), data["error"])
-                # MCP returns the result under "result"; structured content is in
-                # result.structuredContent for typed outputs, or result.content[].text
-                # for freeform.  We try both.
                 result = data.get("result", data)
                 if isinstance(result, dict):
                     if "structuredContent" in result:
                         return result["structuredContent"]
                     content = result.get("content")
                     if isinstance(content, list) and content:
-                        # take the first text part
                         first = content[0]
                         if isinstance(first, dict) and "text" in first:
                             try:
@@ -214,92 +261,50 @@ class OrbioMCPClient:
                 await asyncio.sleep(wait)
         raise OrbioMCPError(tool, f"giving up after {self.max_retries} retries: {last_err}")
 
-    # ── Public tools ──────────────────────────────────────────────────
+    # ── Public tools (live API, 5 tools) ──────────────────────────────
 
     async def get_balance(self) -> Balance:
-        """orbio_get_balance — how many unclaimed credits you have right now."""
+        """orbio_get_balance — live credit picture; balance IS the quota."""
         p = await self._call("orbio_get_balance", {})
         return Balance.from_payload(p)
 
-    async def claim_key(self, cap_usd: float = 200.0) -> Key:
-        """orbio_claim_key — mint a fresh OpenRouter key funded up to cap_usd."""
-        if cap_usd <= 0 or cap_usd > 200.0:
-            raise ValueError("cap_usd must be in (0, 200]")
-        p = await self._call("orbio_claim_key", {"cap_usd": cap_usd})
-        return Key(
-            key_id=p.get("key_id", ""),
-            secret=p.get("secret", ""),
-            headroom_usd=float(p.get("headroom", cap_usd)),
-            raw=p,
-        )
+    async def get_key_status(self) -> KeyStatus:
+        """orbio_get_key_status — whether a key exists + metadata.
 
-    async def get_key_status(self, key_id: str) -> KeyStatus:
-        """orbio_get_key_status — live key spend (sourced from OpenRouter)."""
-        p = await self._call("orbio_get_key_status", {"key_id": key_id})
+        Takes no arguments in the live API (it is per-account, not per-key).
+        """
+        p = await self._call("orbio_get_key_status", {})
         return KeyStatus.from_payload(p)
 
-    async def top_up_key(self, key_id: str, amount_usd: float) -> Key:
-        """orbio_top_up_key — move more balance onto the same key. Secret unchanged."""
-        p = await self._call(
-            "orbio_top_up_key", {"key_id": key_id, "amount_usd": amount_usd}
-        )
-        return Key(
-            key_id=p.get("key_id", key_id),
-            secret=p.get("secret", ""),
-            headroom_usd=float(p.get("headroom", 0.0)),
-            spend_usd=float(p.get("spend", 0.0)),
-            raw=p,
-        )
+    async def create_key(self, label: str | None = None) -> Key:
+        """orbio_create_key — mint the key; secret shown exactly once.
 
-    async def rotate_key(self, key_id: str) -> Key:
-        """orbio_rotate_key — fresh secret on the same credit. Old secret dies first."""
-        p = await self._call("orbio_rotate_key", {"key_id": key_id})
-        return Key(
-            key_id=p.get("key_id", key_id),
-            secret=p.get("secret", ""),
-            headroom_usd=float(p.get("headroom", 0.0)),
-            raw=p,
-        )
-
-    async def delete_key(self, key_id: str) -> None:
-        """orbio_delete_key — kill the key. Whatever wasn't spent comes back to balance."""
-        await self._call("orbio_delete_key", {"key_id": key_id})
-
-    # ── Convenience: high-level flow ─────────────────────────────────
-
-    async def ensure_key(
-        self,
-        *,
-        current_key_id: str | None,
-        cap_usd: float,
-        low_balance_threshold_usd: float,
-    ) -> tuple[Key, str]:
-        """Return (key, action) where action ∈ {"claimed","reused","topped_up","rotated"}.
-
-        This is the high-level helper the daemon calls once per tick.
+        If a key already exists it is retired in the same statement
+        (``replaced: true``), so this is also the rotation / leak response.
+        There is no amount to choose — the key draws on the live balance.
         """
-        bal = await self.get_balance()
+        args: dict[str, Any] = {}
+        if label:
+            args["label"] = label[:60]
+        p = await self._call("orbio_create_key", args)
+        return Key(
+            secret=p.get("key", ""),
+            prefix=p.get("prefix", ""),
+            base_url=p.get("baseUrl", ""),
+            replaced=bool(p.get("replaced", False)),
+            raw=p,
+        )
 
-        if current_key_id is None:
-            if bal.unclaimed_usd < low_balance_threshold_usd:
-                # Not enough to even claim — caller will wait and retry.
-                return (None, "insufficient_balance")  # type: ignore[return-value]
-            key = await self.claim_key(cap_usd=cap_usd)
-            return (key, "claimed")
+    async def revoke_key(self) -> RevokeResult:
+        """orbio_revoke_key — stop the key; balance untouched."""
+        p = await self._call("orbio_revoke_key", {})
+        return RevokeResult(revoked=bool(p.get("revoked", False)), raw=p)
 
-        # We have a key — check its status.
-        status = await self.get_key_status(current_key_id)
-        if status.remaining_usd <= 0:
-            # Out of headroom.  Try to top up from unclaimed; if not enough, rotate.
-            if bal.unclaimed_usd >= cap_usd:
-                key = await self.top_up_key(current_key_id, cap_usd)
-                return (key, "topped_up")
-            key = await self.rotate_key(current_key_id)
-            return (key, "rotated_depleted")
+    async def delete_key(self) -> DeleteResult:
+        """orbio_delete_key — legacy pre-gateway OpenRouter key cleanup.
 
-        return (Key(  # reuse the existing one
-            key_id=status.key_id,
-            secret="",  # secret not re-fetched — we keep using what we had
-            headroom_usd=status.remaining_usd,
-            spend_usd=status.spend_usd,
-        ), "reused")
+        Returns unspent credit to the account balance.  No-op for accounts
+        that never provisioned a legacy key.
+        """
+        p = await self._call("orbio_delete_key", {})
+        return DeleteResult.from_payload(p)

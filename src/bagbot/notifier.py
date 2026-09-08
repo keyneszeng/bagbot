@@ -48,26 +48,26 @@ class NotifyEvent:
 # ── Locale helpers ────────────────────────────────────────────────────────
 
 _ZH_TEMPLATES = {
-    "key_claimed": "🟢 成功领取新 key：headroom ${headroom:.2f}",
-    "key_topped_up": "🔵 已为 key 充值 ${amount:.2f}",
+    "key_created": "🟢 已创建新 key（{prefix}）",
     "key_rotated": "🟡 已轮换 key（{reason}）",
-    "key_deleted": "🔴 已停用 key（{reason}）",
-    "balance_low": "⚠️ 未领取余额偏低：${unclaimed:.2f}（阈值 ${threshold:.2f}）",
+    "key_revoked": "🔴 已撤销 key（疑似泄露）：{reason}",
+    "legacy_key_deleted": "🟠 已清理旧版 key，退回 ${refunded_usd:.2f}",
+    "balance_low": "⚠️ 可花余额偏低：${balance:.2f}（阈值 ${threshold:.2f}）",
     "burn_high": "🔥 燃烧速度异常：${rate:.2f}/h（阈值 ${threshold:.2f}/h）",
-    "tick": "📊 状态：余额 ${balance:.2f} · key 已用 {used:.0%} · 燃烧 ${rate:.2f}/h",
+    "tick": "📊 状态：余额 ${balance:.2f} · key {prefix} · 燃烧 ${rate:.2f}/h",
     "startup": "🪐 BagBot 已启动（{label}）",
     "shutdown": "🛑 BagBot 已停止",
     "error": "❌ 错误：{msg}",
 }
 
 _EN_TEMPLATES = {
-    "key_claimed": "🟢 Claimed new key: headroom ${headroom:.2f}",
-    "key_topped_up": "🔵 Topped up key by ${amount:.2f}",
+    "key_created": "🟢 Created new key ({prefix})",
     "key_rotated": "🟡 Rotated key ({reason})",
-    "key_deleted": "🔴 Deleted key ({reason})",
-    "balance_low": "⚠️ Unclaimed balance low: ${unclaimed:.2f} (threshold ${threshold:.2f})",
+    "key_revoked": "🔴 Revoked key (suspected leak): {reason}",
+    "legacy_key_deleted": "🟠 Deleted legacy key, refunded ${refunded_usd:.2f}",
+    "balance_low": "⚠️ Spendable balance low: ${balance:.2f} (threshold ${threshold:.2f})",
     "burn_high": "🔥 Burn rate abnormal: ${rate:.2f}/h (threshold ${threshold:.2f}/h)",
-    "tick": "📊 Balance ${balance:.2f} · key used {used:.0%} · burn ${rate:.2f}/h",
+    "tick": "📊 Balance ${balance:.2f} · key {prefix} · burn ${rate:.2f}/h",
     "startup": "🪐 BagBot started ({label})",
     "shutdown": "🛑 BagBot stopped",
     "error": "❌ Error: {msg}",

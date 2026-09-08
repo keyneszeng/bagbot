@@ -22,7 +22,7 @@
   <main>
     <section class="cards">
       <div class="card">
-        <h3>未领取余额</h3>
+        <h3>可花余额</h3>
         <div class="big" id="bal-unclaimed">—</div>
         <div class="unit">USD</div>
         <div class="hint">低于 ${{ "%.2f"|format(low_balance) }} 时告警</div>
@@ -36,17 +36,16 @@
       </div>
 
       <div class="card">
-        <h3>已兑换</h3>
+        <h3>累计消耗</h3>
         <div class="big" id="bal-claimed">—</div>
         <div class="unit">USD</div>
-        <div class="hint">已 claim 为 OpenRouter key</div>
+        <div class="hint">通过网关花掉的信用</div>
       </div>
 
       <div class="card">
-        <h3>当前 Key 剩余</h3>
+        <h3>当前 Key</h3>
         <div class="big" id="key-remaining">—</div>
-        <div class="unit">USD</div>
-        <div class="hint">已用 <span id="key-used">—</span></div>
+        <div class="hint" style="margin-top:8px"><span id="key-used">—</span></div>
       </div>
     </section>
 
@@ -55,13 +54,13 @@
       <div id="last-tick">
         <div><span class="lbl">动作</span><span id="action">—</span></div>
         <div><span class="lbl">原因</span><span id="reason">—</span></div>
-        <div><span class="lbl">Key ID</span><span id="key-id">—</span></div>
+        <div><span class="lbl">Key 前缀</span><span id="key-id">—</span></div>
         <div><span class="lbl">时间</span><span id="ts">—</span></div>
       </div>
     </section>
 
     <section class="chart">
-      <h2>未领取余额 24h 趋势</h2>
+      <h2>可花余额 24h 趋势</h2>
       <canvas id="balance-chart" width="800" height="200"></canvas>
     </section>
 
@@ -77,15 +76,14 @@
 
     <section class="actions">
       <h2>手动操作</h2>
-      <button onclick="manualClaim()">手动 Claim Key</button>
-      <button onclick="manualRotate()">手动 Rotate Key</button>
-      <button onclick="manualTopup()">手动 Top-up $20</button>
+      <button onclick="manualCreate()">创建 / 轮换 Key</button>
+      <button class="danger" onclick="manualRevoke()">撤销 Key</button>
       <span id="action-result"></span>
     </section>
   </main>
 
   <footer>
-    BagBot v0.1.0 · <a href="https://github.com/keyneszeng/bagbot" target="_blank">GitHub</a>
+    BagBot v0.2.0 · <a href="https://github.com/keyneszeng/bagbot" target="_blank">GitHub</a>
     · Built for <a href="https://orbio.so/build" target="_blank">Orbio Build Week</a>
   </footer>
 

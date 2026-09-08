@@ -99,6 +99,21 @@ class StateStore:
             )
             await db.commit()
 
+    async def retire_all_active(self, reason: str) -> int:
+        """Retire every currently-active key row.  Returns rows affected.
+
+        Used when the server says a new key replaced an old one and we
+        don't know the old record's id (e.g. manual create via dashboard).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                """UPDATE keys SET retired_at=?, retire_reason=?
+                   WHERE retired_at IS NULL""",
+                (time.time(), reason),
+            )
+            await db.commit()
+            return cur.rowcount or 0
+
     async def current_key(self) -> KeyRecord | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

@@ -1,18 +1,21 @@
-"""End-to-end daemon tick test using a fake MCP transport.
+"""End-to-end daemon tick tests using a fake MCP transport (gateway model).
 
 This is the highest-value test: it exercises config loading → state init →
-daemon.tick() → decision → action → state update → notification.
+daemon.tick() → decision → action → state update → notification, against
+the live Orbio gateway payload shapes ({"usd", "microUsd"}, hasKey/prefix…).
 """
 
 import asyncio
 import json
+import time
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 import pytest
 
 from bagbot.daemon import BagBot
-from bagbot.orbio_mcp import KeyStatus
+from bagbot.state import KeyRecord
 
 
 def _ok(payload: dict[str, Any]) -> httpx.Response:
@@ -23,25 +26,35 @@ def _structured(payload: dict[str, Any]) -> dict[str, Any]:
     return {"structuredContent": payload}
 
 
-def _make_transport(handlers: dict[str, dict[str, Any]]):
-    """Build a MockTransport that returns pre-canned responses per tool name."""
-    def handler(req: httpx.Request) -> httpx.Response:
-        # Extract the tool name from the JSON-RPC body
-        try:
-            body = json.loads(req.content.decode())
-            tool = body.get("params", {}).get("name", "?")
-        except Exception:
-            tool = "?"
-        if tool in handlers:
-            return _ok(handlers[tool])
-        return _ok(_structured({"earned": 0, "claimed": 0, "unclaimed": 0}))
-    return httpx.MockTransport(handler)
+def _balance(spendable: float, accrued: float = 100.0) -> dict[str, Any]:
+    return _structured({
+        "wallets": ["0xtest"],
+        "accrued": {"usd": accrued, "microUsd": str(int(accrued * 1_000_000))},
+        "purchased": {"usd": 0, "microUsd": "0"},
+        "spent": {"usd": 0, "microUsd": "0"},
+        "claimed": {"usd": 0, "microUsd": "0"},
+        "balance": {"usd": spendable, "microUsd": str(int(spendable * 1_000_000))},
+    })
+
+
+def _status(has: bool, prefix: str | None = "sk-orbio-ab12",
+            created_hours_ago: float = 1.0) -> dict[str, Any]:
+    from datetime import datetime, timedelta, timezone
+    created = (datetime.now(timezone.utc)
+               - timedelta(hours=created_hours_ago)).isoformat()
+    return _structured({
+        "hasKey": has,
+        "prefix": prefix if has else None,
+        "createdAt": created if has else None,
+        "lastUsedAt": None,
+        "baseUrl": "https://api.orbio.so/api/v1",
+        "legacy": None,
+    })
 
 
 @pytest.fixture
 def tmp_settings(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # Make sure all secrets are empty so the daemon works in test mode
     monkeypatch.setenv("ORBIO_WALLET", "0xtest")
     monkeypatch.setenv("ORBIO_MCP_TOKEN", "tok")
     monkeypatch.setenv("ORBIO_MCP_URL", "https://x.example/mcp")
@@ -56,369 +69,338 @@ def tmp_settings(tmp_path, monkeypatch):
     return cfg_module.get_settings()
 
 
+@asynccontextmanager
+async def mocked(handlers: dict[str, Any]):
+    """Transport that serves canned responses per tool name."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        try:
+            body = json.loads(req.content.decode())
+            tool = body.get("params", {}).get("name", "?")
+        except Exception:
+            tool = "?"
+        if tool in handlers:
+            return _ok(handlers[tool])
+        return _ok(_balance(0.0))
+    transport = httpx.MockTransport(handler)
+
+    class _MCPProxy:
+        """Minimal duck-type of OrbioMCPClient for the daemon tick."""
+        endpoint = "https://x.example/mcp"
+        token = "tok"
+
+        def __init__(self):
+            self._client = httpx.AsyncClient(
+                transport=transport, base_url=self.endpoint,
+                headers={"Authorization": "Bearer tok"},
+            )
+            self.calls: list[str] = []
+
+        async def _call(self, tool, arguments=None):
+            from bagbot.orbio_mcp import OrbioMCPError
+            self.calls.append(tool)
+            try:
+                body = json.loads(
+                    (await self._client.post(self.endpoint, json={
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": tool, "arguments": arguments or {}},
+                    })).content.decode()
+                )
+            except Exception as e:  # pragma: no cover
+                raise OrbioMCPError(tool, str(e))
+            if "error" in body:
+                raise OrbioMCPError(tool, str(body["error"]))
+            return body.get("result", {}).get("structuredContent", {})
+
+        async def get_balance(self):
+            from bagbot.orbio_mcp import Balance
+            return Balance.from_payload(await self._call("orbio_get_balance"))
+
+        async def get_key_status(self):
+            from bagbot.orbio_mcp import KeyStatus
+            return KeyStatus.from_payload(await self._call("orbio_get_key_status"))
+
+        async def create_key(self, label=None):
+            from bagbot.orbio_mcp import Key
+            return Key(secret="sk-orb-NEW", prefix="sk-orbio-new1", base_url="https://api.orbio.so/api/v1", replaced=True,
+            ) if "orbio_create_key" in handlers else Key(
+                secret="sk-orb-NEW", prefix="sk-orbio-new1",
+                base_url="https://api.orbio.so/api/v1", replaced=False)
+
+        async def revoke_key(self):
+            from bagbot.orbio_mcp import RevokeResult
+            return RevokeResult(revoked=True)
+
+        async def delete_key(self):
+            from bagbot.orbio_mcp import DeleteResult
+            return DeleteResult(refunded_usd=0.0)
+
+    proxy = _MCPProxy()
+    try:
+        yield proxy
+    finally:
+        await proxy._client.aclose()
 
 
-class _FakeMCP:
-    """Placeholder MCP for _execute branches that never touch the network."""
-
-    def __init__(self):
-        self.calls: list[str] = []
-
-@pytest.mark.asyncio
-async def test_first_tick_claims_when_no_key_and_balance_enough(tmp_settings):
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0}
-        ),
-        "orbio_claim_key": _structured(
-            {"key_id": "k_first", "secret": "sk-first", "headroom": 200.0}
-        ),
-    }
-    transport = _make_transport(handlers)
-
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-
-    report = await bot.tick()
-    assert report.action.value == "claim"
-    cur = await bot.state.current_key()
-    assert cur is not None
-    assert cur.key_id == "k_first"
-
-
-@pytest.mark.asyncio
-async def test_first_tick_alerts_when_no_key_and_balance_low(tmp_settings):
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 1.0, "claimed": 0.0, "unclaimed": 1.0}
-        ),
-    }
-    transport = _make_transport(handlers)
-
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-
-    report = await bot.tick()
-    assert report.action.value == "alert"
-    cur = await bot.state.current_key()
-    assert cur is None  # no key was saved
-
-
-@pytest.mark.asyncio
-async def test_topup_when_key_used_past_threshold(tmp_settings):
-    """Save a key with very high usage, then on the next tick the policy should top it up."""
-    from bagbot.state import KeyRecord
-    import time
-
-    # spend=180, headroom=20 → used_fraction = 180/200 = 0.9 (> 0.8 threshold)
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 50.0, "claimed": 0.0, "unclaimed": 50.0}
-        ),
-        "orbio_get_key_status": _structured({
-            "key_id": "k_old", "spend": 180.0, "headroom": 20.0, "remaining": 20.0
-        }),
-        "orbio_top_up_key": _structured({
-            "key_id": "k_old", "headroom": 220.0, "spend": 180.0
-        }),
-    }
-    transport = _make_transport(handlers)
-
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_old", secret="sk-old",
-        headroom_usd=200.0, spend_usd=0.0,
-        created_at=time.time() - 3600,
-    ))
-
-    report = await bot.tick()
-    assert report.action.value == "topup"
-
+# ── tick → decision → action ─────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_rotate_when_key_too_old(tmp_settings):
-    from bagbot.state import KeyRecord
-    import time
+async def test_first_tick_creates_when_no_key(tmp_settings):
+    async with mocked({
+        "orbio_get_balance": _balance(10.0),
+        "orbio_get_key_status": _status(False),
+        "orbio_create_key": _structured({
+            "key": "sk-orb-NEW", "prefix": "sk-orbio-new1",
+            "baseUrl": "https://api.orbio.so/api/v1", "replaced": False}),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
 
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 0.5, "claimed": 0.5, "unclaimed": 0.0}
-        ),
-        "orbio_get_key_status": _structured({
-            "key_id": "k_old", "spend": 10.0, "headroom": 200.0, "remaining": 190.0
-        }),
-        "orbio_rotate_key": _structured({
-            "key_id": "k_new", "secret": "sk-new", "headroom": 0.0
-        }),
-    }
-    transport = _make_transport(handlers)
+        report = await bot.tick()
+        assert report.action.value == "create"
+        cur = await bot.state.current_key()
+        assert cur is not None
+        assert cur.key_id == "sk-orbio-new1"
+        assert cur.secret == "sk-orb-NEW"  # secret stored exactly once
 
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_old", secret="sk-old",
-        headroom_usd=200.0, spend_usd=10.0,
-        # 8 days old, > 168h cap
-        created_at=time.time() - 8 * 24 * 3600,
-    ))
 
-    report = await bot.tick()
-    assert report.action.value == "rotate"
-
-    # Old key should be retired
-    keys = await bot.state.recent_keys(limit=10)
-    old = next(k for k in keys if k.key_id == "k_old")
-    assert old.retired_at is not None
-    assert "age" in (old.retire_reason or "").lower()
+@pytest.mark.asyncio
+async def test_first_tick_creates_even_with_zero_balance(tmp_settings):
+    """Gateway: key is free; a zero balance must not block creation."""
+    async with mocked({
+        "orbio_get_balance": _balance(0.0),
+        "orbio_get_key_status": _status(False),
+        "orbio_create_key": _structured({
+            "key": "k", "prefix": "sk-orbio-zz",
+            "baseUrl": "b", "replaced": False}),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        report = await bot.tick()
+        assert report.action.value == "create"
 
 
 @pytest.mark.asyncio
 async def test_healthy_key_does_nothing(tmp_settings):
-    from bagbot.state import KeyRecord
-    import time
-
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 5.0, "claimed": 5.0, "unclaimed": 0.0}
-        ),
-        "orbio_get_key_status": _structured({
-            "key_id": "k_healthy", "spend": 5.0, "headroom": 200.0, "remaining": 195.0
-        }),
-    }
-    transport = _make_transport(handlers)
-
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_healthy", secret="sk-healthy",
-        headroom_usd=200.0, spend_usd=5.0,
-        created_at=time.time() - 3600,  # 1h old
-    ))
-
-    report = await bot.tick()
-    assert report.action.value == "nothing"
+    async with mocked({
+        "orbio_get_balance": _balance(50.0),
+        "orbio_get_key_status": _status(True, created_hours_ago=1.0),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        await bot.state.save_key(KeyRecord(
+            key_id="sk-orbio-ab12", secret="sk-old",
+            headroom_usd=0.0, spend_usd=0.0,
+            created_at=time.time() - 3600,
+        ))
+        report = await bot.tick()
+        assert report.action.value == "nothing"
 
 
 @pytest.mark.asyncio
-async def test_burn_rate_triggers_rotate(tmp_settings):
-    """A high spend rate should trigger a rotation, even with a healthy balance."""
-    from bagbot.state import KeyRecord
-    import time
+async def test_old_key_recreates_and_retires_record(tmp_settings):
+    async with mocked({
+        "orbio_get_balance": _balance(50.0),
+        "orbio_get_key_status": _status(True, created_hours_ago=8 * 24),
+        "orbio_create_key": _structured({
+            "key": "sk-orb-NEW", "prefix": "sk-orbio-new1",
+            "baseUrl": "b", "replaced": True}),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        await bot.state.save_key(KeyRecord(
+            key_id="sk-orbio-ab12", secret="sk-old",
+            headroom_usd=0.0, spend_usd=0.0,
+            created_at=time.time() - 8 * 24 * 3600,
+        ))
+        report = await bot.tick()
+        assert report.action.value == "create"
 
-    # First call sets _last_status to baseline spend=0
-    # Second call shows spend=50 over an instant — that gives a huge burn rate
-    handlers = {
-        "orbio_get_balance": _structured(
-            {"earned": 50.0, "claimed": 0.0, "unclaimed": 50.0}
-        ),
-        "orbio_get_key_status_first": _structured({
-            "key_id": "k_burn", "spend": 0.0, "headroom": 200.0, "remaining": 200.0
-        }),
-        "orbio_get_key_status": _structured({
-            "key_id": "k_burn", "spend": 50.0, "headroom": 200.0, "remaining": 150.0
-        }),
-        "orbio_rotate_key": _structured({
-            "key_id": "k_rotated", "secret": "sk-r", "headroom": 150.0
-        }),
+        keys = await bot.state.recent_keys(limit=10)
+        old = next(k for k in keys if k.key_id == "sk-orbio-ab12")
+        assert old.retired_at is not None
+        cur = await bot.state.current_key()
+        assert cur is not None and cur.key_id == "sk-orbio-new1"
+
+
+@pytest.mark.asyncio
+async def test_low_balance_alerts_with_key(tmp_settings):
+    async with mocked({
+        "orbio_get_balance": _balance(1.0),
+        "orbio_get_key_status": _status(True, created_hours_ago=1.0),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        await bot.state.save_key(KeyRecord(
+            key_id="sk-orbio-ab12", secret="sk-old",
+            headroom_usd=0.0, spend_usd=0.0,
+            created_at=time.time() - 3600,
+        ))
+        report = await bot.tick()
+        assert report.action.value == "alert"
+        events = await bot.state.recent_events(limit=5)
+        assert any(e["kind"] == "balance_low" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_legacy_key_triggers_delete(tmp_settings):
+    from bagbot.orbio_mcp import KeyStatus
+    status_payload = {
+        "hasKey": True, "prefix": "sk-orbio-ab12",
+        "createdAt": "2026-09-07T04:52:35Z", "lastUsedAt": None,
+        "baseUrl": "https://api.orbio.so/api/v1",
+        "legacy": {"prefix": "sk-or-v1-legacy", "headroom": 5.0},
     }
-    # Override transport to return different responses for the first vs subsequent
-    # status calls.
-    state = {"status_calls": 0}
+    async with mocked({
+        "orbio_get_balance": _balance(50.0),
+        "orbio_get_key_status": _structured(status_payload),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        await bot.state.save_key(KeyRecord(
+            key_id="sk-orbio-ab12", secret="sk-old",
+            headroom_usd=0.0, spend_usd=0.0,
+            created_at=time.time() - 3600,
+        ))
+        # Sanity: our mock returns a KeyStatus with legacy set
+        st = KeyStatus.from_payload(status_payload)
+        assert st.legacy is not None
+        # Drive _execute DELETE branch directly (policy layer tested elsewhere)
+        from bagbot.policy import Action
+        from bagbot.orbio_mcp import Balance as Bal
+        bal = Bal(accrued_usd=50, purchased_usd=0, spent_usd=0,
+                  claimed_usd=0, unclaimed_usd=50)
+        await bot._execute(Action.DELETE, "legacy test",
+                           await bot.state.current_key(), bal, st, bot.mcp)
+        events = await bot.state.recent_events(limit=5)
+        assert any(e["kind"] == "legacy_key_deleted" for e in events)
 
-    def handler(req):
-        body = json.loads(req.content.decode())
-        tool = body.get("params", {}).get("name", "?")
-        if tool == "orbio_get_key_status":
-            state["status_calls"] += 1
-            if state["status_calls"] == 1:
-                return _ok(handlers["orbio_get_key_status_first"])
-            return _ok(handlers["orbio_get_key_status"])
-        if tool in handlers:
-            return _ok(handlers[tool])
-        return _ok(_structured({"earned": 0, "claimed": 0, "unclaimed": 0}))
 
-    transport = httpx.MockTransport(handler)
+# ── Burn rate (balance curve IS the spend curve) ─────────────────────
 
+@pytest.mark.asyncio
+async def test_balance_drop_between_ticks_triggers_revoke_on_burst(tmp_settings):
+    """Two ticks: balance falls $50 in ~50ms → ~$3.6M/h → leak guard revokes."""
+    balances = [50.0, 0.0]
+    async with mocked({
+        "orbio_get_balance": _balance(balances[0]),
+        "orbio_get_key_status": _status(True, created_hours_ago=1.0),
+        "orbio_revoke_key": _structured({"revoked": True}),
+    }) as mcp:
+        bot = BagBot(tmp_settings)
+        bot.mcp = mcp  # type: ignore[assignment]
+        await bot.state.init()
+        await bot.state.save_key(KeyRecord(
+            key_id="sk-orbio-ab12", secret="sk-old",
+            headroom_usd=0.0, spend_usd=0.0,
+            created_at=time.time() - 3600,
+        ))
+
+        r1 = await bot.tick()
+        assert r1.action.value == "nothing"  # baseline: no burn history
+
+        # Second tick sees the balance drop (swap get_balance for one
+        # that returns the lower balance).
+        await asyncio.sleep(0.05)
+        orig = mcp.get_balance
+
+        async def second_balance():
+            from bagbot.orbio_mcp import Balance
+            return Balance.from_payload({
+                "accrued": {"usd": 50.0, "microUsd": "50000000"},
+                "balance": {"usd": 0.0, "microUsd": "0"},
+            })
+        mcp.get_balance = second_balance  # type: ignore[method-assign]
+        try:
+            r2 = await bot.tick()
+        finally:
+            mcp.get_balance = orig  # type: ignore[method-assign]
+
+        assert r2.action.value == "revoke"
+        cur = await bot.state.current_key()
+        assert cur is None, "key should be retired after revoke"
+
+
+@pytest.mark.asyncio
+async def test_balance_increase_is_zero_burn(tmp_settings):
+    """Accruals grow the balance — that must NOT look like negative burn."""
     bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_burn", secret="sk-burn",
-        headroom_usd=200.0, spend_usd=0.0,
-        created_at=time.time() - 3600,
-    ))
-
-    # First tick: baseline, no decision yet because no burn rate history
-    r1 = await bot.tick()
-    assert r1.action.value in ("nothing", "topup")  # we set up a healthy key
-
-    # Wait briefly so dt > 0 in burn rate calc
-    await asyncio.sleep(0.05)
-
-    # Second tick: spend jumped from 0 to 50, dt ~ 0.05s → huge rate
-    r2 = await bot.tick()
-    # At 50 USD / 0.05s = 3600 USD/h — way above 20 USD/h cap → rotate
-    assert r2.action.value == "rotate"
+    bot._last_balance_usd = 10.0
+    bot._last_balance_ts = time.time() - 1.0
+    rate = bot._compute_burn_rate(50.0)  # balance grew
+    assert rate == 0.0
 
 
 @pytest.mark.asyncio
 async def test_burn_rate_zero_dt_returns_zero(tmp_settings):
-    """Defensive: if two consecutive status samples have the same ts (impossible
-    in production, but the code path exists), burn rate should be 0, not Inf."""
-    from bagbot.state import KeyRecord
-    import time
-
+    """dt == 0 (clock frozen) must return 0, never div-by-zero/Inf."""
     bot = BagBot(tmp_settings)
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_dt", secret="s",
-        headroom_usd=200.0, spend_usd=0.0,
-        created_at=time.time() - 3600,
-    ))
-
-    # Pin _last_status_ts to a fixed value AND freeze time.time so dt == 0
-    fixed_ts = 1_700_000_000.0
-    bot._last_status = KeyStatus(
-        key_id="k_dt", spend_usd=10.0,
-        headroom_usd=200.0, remaining_usd=190.0,
-    )
-    bot._last_status_ts = fixed_ts
-
-    # Monkey-patch time.time so it returns exactly the same value
+    bot._last_balance_usd = 10.0
+    bot._last_balance_ts = 100.0
+    fixed = 100.0
     real_time = time.time
-    time.time = lambda: fixed_ts
+    time.time = lambda: fixed
     try:
-        fresh = KeyStatus(
-            key_id="k_dt", spend_usd=20.0,
-            headroom_usd=200.0, remaining_usd=180.0,
-        )
-        rate = bot._compute_burn_rate(fresh)
+        rate = bot._compute_burn_rate(5.0)
     finally:
         time.time = real_time
-
-    assert rate == 0.0, f"dt<=0 should return 0, got {rate}"
+    assert rate == 0.0
 
 
 @pytest.mark.asyncio
-async def test_burn_rate_zero_dt_strictly_less_than_returns_nonzero(tmp_settings):
-    """Edge case: if dt is exactly 0, we return 0; if dt is a hair positive,
-    we return a finite rate.  Regression test for the < vs <= boundary."""
-    from bagbot.state import KeyRecord
-    import time
-
+async def test_burn_rate_first_sample_returns_zero(tmp_settings):
     bot = BagBot(tmp_settings)
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_dt", secret="s",
-        headroom_usd=200.0, spend_usd=0.0,
-        created_at=time.time() - 3600,
-    ))
+    bot._last_balance_usd = None
+    bot._last_balance_ts = 0.0
+    assert bot._compute_burn_rate(42.0) == 0.0
 
-    bot._last_status = KeyStatus(
-        key_id="k_dt", spend_usd=0.0,
-        headroom_usd=200.0, remaining_usd=200.0,
-    )
-    bot._last_status_ts = 100.0
-    real_time = time.time
-    time.time = lambda: 100.0 + 1e-9   # tiny positive dt
-    try:
-        fresh = KeyStatus(
-            key_id="k_dt", spend_usd=1.0,
-            headroom_usd=200.0, remaining_usd=199.0,
-        )
-        rate = bot._compute_burn_rate(fresh)
-    finally:
-        time.time = real_time
 
-    # With dt=1e-9 and delta=1.0, rate = 1e9 USD/h — very large but finite
-    assert rate > 0
-    assert rate < float("inf")
-
+# ── _execute branches (direct drive, new signature) ─────────────────
 
 @pytest.mark.asyncio
-async def test_action_delete_calls_mcp_and_retires(tmp_settings):
-    """Cover the DELETE branch which is currently only triggered by manual
-    action (no policy action produces it).  Verify the I/O sequence."""
-    from bagbot.state import KeyRecord
-    import time
-
-    delete_calls = {"n": 0}
-
-    def handler(req):
-        body = json.loads(req.content.decode())
-        tool = body.get("params", {}).get("name", "?")
-        if tool == "orbio_delete_key":
-            delete_calls["n"] += 1
-            return _ok(_structured({}))
-        if tool == "orbio_get_balance":
-            return _ok(_structured({"earned": 1, "claimed": 0, "unclaimed": 1}))
-        if tool == "orbio_get_key_status":
-            return _ok(_structured({
-                "key_id": "k_del", "spend": 5, "headroom": 200, "remaining": 195
-            }))
-        return _ok(_structured({}))
-
-    transport = httpx.MockTransport(handler)
-    bot = BagBot(tmp_settings)
-    bot.mcp._client = httpx.AsyncClient(transport=transport,
-                                         base_url=bot.mcp.endpoint,
-                                         headers={"Authorization": "Bearer tok"})
-    await bot.state.init()
-    await bot.state.save_key(KeyRecord(
-        key_id="k_del", secret="s",
-        headroom_usd=200.0, spend_usd=5.0,
-        created_at=time.time() - 3600,
-    ))
-
-    # Manually drive the DELETE branch
-    from bagbot.policy import Action
-    await bot._execute(Action.DELETE, "test delete",
-                        await bot.state.current_key(),
-                        type("B", (), {
-                            "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 1
-                        })(),
-                        None, bot.require_mcp())
-
-    assert delete_calls["n"] == 1, "delete_key should have been called"
-    cur = await bot.state.current_key()
-    assert cur is None, "key should be retired after DELETE"
-
-
-@pytest.mark.asyncio
-async def test_action_alert_logs_event(tmp_settings):
-    """Cover the ALERT branch — verify it logs an event."""
+async def test_action_alert_notifies(tmp_settings):
     from bagbot.policy import Action
     from unittest.mock import AsyncMock
+    from bagbot.orbio_mcp import Balance as Bal
 
     bot = BagBot(tmp_settings)
     await bot.state.init()
-    # Replace notifier with a no-op so we don't accidentally try to deliver
     bot.notifier = AsyncMock()
 
-    fake_balance = type("B", (), {
-        "earned_usd": 1, "claimed_usd": 0, "unclaimed_usd": 0
-    })()
-
-    await bot._execute(Action.ALERT, "test alert", None, fake_balance, None, _FakeMCP())
-
-    # An event row should be in the DB
+    bal = Bal(accrued_usd=1.0, purchased_usd=0, spent_usd=0,
+              claimed_usd=0, unclaimed_usd=0.5)
+    await bot._execute(Action.ALERT, "test alert", None, bal, None,
+                       bot.require_mcp())
     events = await bot.state.recent_events(limit=5)
-    assert any(e["kind"] == "alert" for e in events)
+    assert any(e["kind"] == "balance_low" for e in events)
+    bot.notifier.notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_action_create_saves_secret_once(tmp_settings):
+    from bagbot.policy import Action
+    from unittest.mock import AsyncMock
+    from bagbot.orbio_mcp import Balance as Bal, Key
+
+    bot = BagBot(tmp_settings)
+    await bot.state.init()
+    bot.notifier = AsyncMock()
+
+    class FakeMCP:
+        async def create_key(self, label=None):
+            return Key(secret="sk-orb-XYZ", prefix="sk-orbio-xy",
+                       base_url="https://api.orbio.so/api/v1", replaced=False)
+
+    bal = Bal(accrued_usd=10, purchased_usd=0, spent_usd=0,
+              claimed_usd=0, unclaimed_usd=10)
+    await bot._execute(Action.CREATE, "test create", None, bal, None, FakeMCP())
+    cur = await bot.state.current_key()
+    assert cur is not None
+    assert cur.secret == "sk-orb-XYZ"
+    events = await bot.state.recent_events(limit=5)
+    assert any(e["kind"] == "key_created" for e in events)

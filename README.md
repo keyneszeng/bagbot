@@ -13,23 +13,25 @@
 [![Mutation Testing](https://github.com/keyneszeng/bagbot/workflows/Mutation%20Testing%20(nightly)/badge.svg)](https://github.com/keyneszeng/bagbot/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-120%20passing-brightgreen.svg)](tests/)
 [![Mutation score: 92.9%](https://img.shields.io/badge/mutation%20score%20(policy)-92.9%25-brightgreen.svg)](scripts/mutation_test.py)
 
 ---
 
 ## 🪐 What is BagBot?
 
-BagBot is a 7×24 unattended Python daemon that:
+BagBot is a 7×24 unattended Python daemon built on the **live Orbio
+gateway API** (5 tools, schema verified against production 2026-09-08):
 
-1. **Monitors** your `$ORBIO` balance via the [Orbio MCP](https://orbio.so/mcp) `orbio_get_balance` (every 5 min)
-2. **Auto-claims** a fresh OpenRouter key when the current one is running low (`orbio_claim_key`)
-3. **Watches** your key's spend in real time via `orbio_get_key_status`
-4. **Auto-tops-up** before the key dies (`orbio_top_up_key`)
-5. **Auto-rotates** the key on anomaly detection (`orbio_rotate_key`)
-6. **Auto-kills** the key on catastrophic events (`orbio_delete_key`)
-7. **Reports** everything to WeChat / Feishu / Email / Webhook in **Chinese** + a local dashboard
-8. **Runs as a service** via `launchd` (macOS) / `systemd` (Linux)
+1. **Monitors** your spendable balance via `orbio_get_balance` (every 5 min) — in the gateway model the balance IS the quota
+2. **Creates** the key the moment your account has none (`orbio_create_key`) — a key is free; it just spends the balance
+3. **Watches** key health via `orbio_get_key_status` (per-account, no key id needed)
+4. **Rotates** on age hygiene — `orbio_create_key` again retires the old key atomically
+5. **Revokes** on leak detection — if the burn rate spikes (`orbio_revoke_key`), then recreates on the next tick
+6. **Cleans up** legacy pre-gateway OpenRouter keys with a refund (`orbio_delete_key`)
+7. **Alerts** when the spendable balance runs low — "hold more $ORBIO"
+8. **Reports** everything to WeChat / Feishu / Email / Webhook in **Chinese** + a local dashboard
+9. **Runs as a service** via `launchd` (macOS) / `systemd` (Linux)
 
 ---
 
@@ -41,7 +43,7 @@ BagBot is a 7×24 unattended Python daemon that:
 ├──────────────────────────────────────────────┤
 │  ┌────────────┐    ┌──────────────────────┐  │
 │  │   Daemon   │───▶│  Orbio MCP Client    │  │
-│  │  (asyncio) │    │  (6 tools wrapper)   │  │
+│  │  (asyncio) │    │  (5 tools wrapper)   │  │
 │  └─────┬──────┘    └──────────────────────┘  │
 │        │                                      │
 │        ├────▶ State Store (SQLite)            │
@@ -82,7 +84,7 @@ bash scripts/install_systemd.sh    # Linux
 ```
 
 > **First time?** Run `python scripts/demo_e2e.py` before touching `.env` —
-> it shows the full claim → topup → rotate → alert loop with zero setup.
+> it shows the full create → healthy → rotate → revoke → alert loop with zero setup.
 
 ---
 
@@ -128,7 +130,7 @@ Once installed, an agent can use the skill's zero-config facades:
 
 ```bash
 PYTHONPATH=skills/bagbot/scripts python3 skills/bagbot/scripts/bagbot_cli.py decide 10.0
-# → action: claim  |  reason: no key yet; balance is enough to claim
+# → action: create |  reason: no key yet; creating (key is free, spends balance)
 ```
 
 ---

@@ -14,20 +14,19 @@ async function fetchState() {
 
 function renderState(s) {
   $('bal-unclaimed').textContent = '$' + s.balance.unclaimed_usd.toFixed(2);
-  $('bal-earned').textContent    = '$' + s.balance.earned_usd.toFixed(2);
-  $('bal-claimed').textContent   = '$' + s.balance.claimed_usd.toFixed(2);
+  $('bal-earned').textContent    = '$' + (s.balance.accrued_usd ?? s.balance.earned_usd ?? 0).toFixed(2);
+  $('bal-claimed').textContent   = '$' + s.balance.spent_usd?.toFixed(2) ?? '$0.00';
 
-  if (s.key) {
-    $('key-remaining').textContent = '$' + s.key.remaining_usd.toFixed(2);
-    $('key-used').textContent =
-      '$' + s.key.spend_usd.toFixed(2) + ' / ' +
-      '$' + s.key.headroom_usd.toFixed(2) +
-      ' (' + (s.key.used_fraction * 100).toFixed(0) + '%)';
-    $('key-id').textContent = s.key.key_id;
+  if (s.key && s.key.has_key) {
+    $('key-id').textContent = s.key.prefix || '—';
+    $('key-remaining').textContent = '账户余额即额度';
+    $('key-used').textContent = s.key.last_used_at
+      ? '上次使用 ' + new Date(s.key.last_used_at * 1000).toLocaleString('zh-CN')
+      : '尚未使用';
   } else {
+    $('key-id').textContent = '无 key';
     $('key-remaining').textContent = '—';
     $('key-used').textContent = '—';
-    $('key-id').textContent = '—';
   }
 
   $('action').textContent = s.action;
@@ -129,31 +128,20 @@ function authHeaders(extra) {
   return h;
 }
 
-async function manualClaim() {
-  const r = await fetch('/api/claim', { method: 'POST', headers: authHeaders() });
+async function manualCreate() {
+  const r = await fetch('/api/create', { method: 'POST', headers: authHeaders() });
   const body = await r.json().catch(() => ({}));
   $('action-result').textContent = r.ok
-    ? '✓ 已 claim key ' + (body.key_id || '').slice(0, 10) + '…'
+    ? '✓ 已' + (body.replaced ? '轮换' : '创建') + ' key ' + (body.prefix || '')
     : '✗ 失败：' + (body.detail || r.status);
   setTimeout(fetchState, 1500);
 }
-async function manualRotate() {
-  const r = await fetch('/api/rotate', { method: 'POST', headers: authHeaders() });
+async function manualRevoke() {
+  if (!confirm('确定撤销当前 key？撤销后需重新创建。')) return;
+  const r = await fetch('/api/revoke', { method: 'POST', headers: authHeaders() });
   const body = await r.json().catch(() => ({}));
   $('action-result').textContent = r.ok
-    ? '✓ 已 rotate ' + (body.new_key_id || '').slice(0, 10) + '…'
-    : '✗ 失败：' + (body.detail || r.status);
-  setTimeout(fetchState, 1500);
-}
-async function manualTopup() {
-  const r = await fetch('/api/topup', {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ amount: 20 }),
-  });
-  const body = await r.json().catch(() => ({}));
-  $('action-result').textContent = r.ok
-    ? '✓ 已 top-up 到 $' + Number(body.headroom_usd || 0).toFixed(2)
+    ? (body.revoked ? '✓ 已撤销 key' : '· 本来就没有 key')
     : '✗ 失败：' + (body.detail || r.status);
   setTimeout(fetchState, 1500);
 }

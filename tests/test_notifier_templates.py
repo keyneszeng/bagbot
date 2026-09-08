@@ -5,15 +5,15 @@ from bagbot.notifier import render_message
 
 
 def test_zh_template_renders_with_kwargs():
-    out = render_message("zh-CN", "key_claimed", headroom=12.5)
-    assert "12.50" in out
-    assert "领取" in out
+    out = render_message("zh-CN", "key_created", prefix="sk-orbio-ab12")
+    assert "sk-orbio-ab12" in out
+    assert "创建" in out
 
 
 def test_en_template_renders():
-    out = render_message("en", "key_claimed", headroom=12.5)
-    assert "12.50" in out
-    assert "Claimed" in out
+    out = render_message("en", "key_created", prefix="sk-orbio-ab12")
+    assert "sk-orbio-ab12" in out
+    assert "Created" in out
 
 
 def test_unknown_kind_returns_raw_key():
@@ -26,14 +26,14 @@ def test_missing_kwargs_does_not_crash():
     """If a template needs {foo} and we don't pass it, .format() will KeyError.
     Our current implementation just returns the template string — verify that
     behavior is graceful (no exception)."""
-    out = render_message("zh-CN", "key_claimed")  # headroom missing
+    out = render_message("zh-CN", "key_created")  # prefix missing
     # Should not raise; either returns unformatted template or the kind
     assert isinstance(out, str)
 
 
 def test_balance_low_template():
     out = render_message("zh-CN", "balance_low",
-                         unclaimed=2.5, threshold=5.0)
+                         balance=2.5, threshold=5.0)
     assert "2.50" in out
     assert "5.00" in out
 
@@ -46,10 +46,11 @@ def test_burn_high_template():
 
 def test_tick_template():
     out = render_message("zh-CN", "tick",
-                         balance=10.0, used=0.85, rate=15.0)
-    assert "85%" in out or "0.85" in out
+                         balance=10.0, prefix="sk-orbio-ab12", rate=15.0)
+    assert "10.00" in out
+    assert "sk-orbio-ab12" in out
 
 
 def test_locale_falls_back_to_english_for_unknown_lang():
-    out = render_message("ja", "key_claimed", headroom=1.0)
-    assert "Claimed" in out  # english fallback
+    out = render_message("ja", "key_created", prefix="sk-orbio-x1")
+    assert "Created" in out  # english fallback
