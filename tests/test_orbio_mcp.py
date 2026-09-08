@@ -359,3 +359,35 @@ async def test_client_requires_endpoint():
 async def test_endpoint_trailing_slash_normalised():
     c = OrbioMCPClient("https://x.example/mcp/", "tok")
     assert c.endpoint == "https://x.example/mcp"
+
+
+@pytest.mark.asyncio
+async def test_4xx_fails_fast_without_retry():
+    """Regression (found live): a 401 expired-token response is
+    deterministic — 3 retries with back-off just wasted ~14s and made
+    'token expired' look like a flaky network. 4xx must fail on the
+    first attempt."""
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return httpx.Response(401, text="Unauthorized")
+    async with mock_client(handler, max_retries=3) as c:
+        with pytest.raises(OrbioMCPError) as exc:
+            await c.get_balance()
+    assert calls["n"] == 1, "4xx must not be retried"
+    assert "401" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_5xx_still_retries():
+    """Server-side 5xx stays retryable — only 4xx skips the loop."""
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return httpx.Response(503, text="overloaded")
+    async with mock_client(handler, max_retries=3) as c:
+        with pytest.raises(OrbioMCPError):
+            await c.get_balance()
+    assert calls["n"] == 3

@@ -168,6 +168,14 @@ class OrbioMCPError(RuntimeError):
         self.payload = payload or {}
 
 
+class _NoRetry(Exception):
+    """Wrapper marking a deterministic failure (4xx) — the retry loop
+    re-raises immediately instead of backing off."""
+    def __init__(self, cause: OrbioMCPError):
+        super().__init__(str(cause))
+        self.cause = cause
+
+
 # ── Client ────────────────────────────────────────────────────────────────
 
 class OrbioMCPClient:
@@ -236,6 +244,15 @@ class OrbioMCPClient:
                     continue
                 if resp.status_code >= 500:
                     raise OrbioMCPError(tool, f"server {resp.status_code}: {resp.text[:200]}")
+                if resp.status_code >= 400:
+                    # 4xx (401 expired token / 403 / 404 …) is deterministic —
+                    # retrying cannot fix it, fail fast with the status hint.
+                    raise _NoRetry(OrbioMCPError(
+                        tool,
+                        f"HTTP {resp.status_code} {resp.reason_phrase}: "
+                        f"{resp.text[:200]}",
+                        {"http_status": resp.status_code},
+                    ))
                 resp.raise_for_status()
                 data = resp.json()
                 if "error" in data:
@@ -253,6 +270,8 @@ class OrbioMCPClient:
                             except json.JSONDecodeError:
                                 return {"text": first["text"]}
                 return result if isinstance(result, dict) else {"value": result}
+            except _NoRetry as e:
+                raise e.cause from None
             except (httpx.HTTPError, OrbioMCPError) as e:
                 last_err = e
                 wait = min(2 ** attempt, 30)
