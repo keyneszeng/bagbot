@@ -180,7 +180,7 @@ async def cmd_dashboard(args) -> int:
     s = get_settings()
     bot = BagBot(s)
     await bot.state.init()
-    run_dashboard(bot, s)
+    await run_dashboard(bot, s)
     return 0
 
 

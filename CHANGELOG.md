@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug fixes (found by full-stack integration testing)
+
+- **`bagbot dashboard` crashed on startup** (`src/bagbot/dashboard.py`,
+  `src/bagbot/cli.py`)
+  `run_dashboard()` called `uvicorn.run()`, which tries to create its own
+  event loop — raising "Cannot run the event loop while another loop is
+  running" because `cmd_dashboard` was already inside `asyncio.run()`.
+  Rewritten as an async coroutine that builds a `uvicorn.Server` and awaits
+  `serve()` on the existing loop. Verified by real HTTP requests:
+  `GET /` → 200, unauthenticated mutations → 403 (read-only) or 401
+  (wrong token), correct token → passes through to MCP.
+
+- **`bagbot` console script was missing** (`pyproject.toml`)
+  The project claimed `pip install -e .` provides a `bagbot` command, but
+  `[project.scripts]` was never declared. Added
+  `bagbot = "bagbot.cli:main"`; verified the entry point serves
+  `status`/`probe`/`once`/`run`/`dashboard` after a fresh editable install.
+
+- **`BagBot.__init__` raised when `ORBIO_MCP_TOKEN` was unset**
+  (`src/bagbot/daemon.py`)
+  Constructing the object without a token raised `ValueError` immediately,
+  blocking tests, demos and introspection. Token-less construction now
+  defers client creation (`self.mcp is None`) and `require_mcp()` raises a
+  clear `OrbioMCPError` only when a network call is actually attempted.
+
+### 🛠 Tooling
+
+- **`make install` no longer hardcodes `python3.10`** (Makefile,
+  `scripts/detect_python.sh`) — auto-detects the newest Python ≥ 3.10 in
+  PATH and prints actionable guidance when none is found.
+- **`make demo` target** runs `scripts/demo_e2e.py` (zero-config 5-tick
+  end-to-end demo); errors clearly when the venv does not exist yet.
+
 ## [0.1.2] — 2026-09-06
 
 ### 🐛 Bug fixes

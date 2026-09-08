@@ -203,13 +203,22 @@ def build_app(bot: BagBot, settings: Settings) -> FastAPI:
     return app
 
 
-def run_dashboard(bot: BagBot, settings: Settings) -> None:
+async def run_dashboard(bot: BagBot, settings: Settings) -> None:
+    """Serve the dashboard inside the already-running asyncio loop.
+
+    ``uvicorn.run()`` would try to create its own event loop, which raises
+    "Cannot run the event loop while another loop is running" when called
+    from ``cli.cmd_dashboard`` (already inside ``asyncio.run``).  Building
+    a ``uvicorn.Server`` and awaiting ``serve()`` reuses the current loop.
+    """
     import uvicorn
 
     app = build_app(bot, settings)
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=settings.dashboard.host,
         port=settings.dashboard.port,
         log_level="info",
     )
+    server = uvicorn.Server(config)
+    await server.serve()

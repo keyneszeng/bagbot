@@ -33,6 +33,9 @@ dependencies = [
     "tzdata>=2024.1",
 ]
 
+[project.scripts]
+bagbot = "bagbot.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
