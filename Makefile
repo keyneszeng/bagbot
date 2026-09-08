@@ -1,4 +1,4 @@
-.PHONY: help install dev test lint run dashboard probe status clean
+.PHONY: help install dev test lint run dashboard probe once status demo clean
 
 PYTHON ?= python3.10
 VENV  ?= .venv
@@ -11,9 +11,12 @@ install:  ## Create venv and install dependencies.
 	$(VENV)/bin/pip install --upgrade pip
 	$(VENV)/bin/pip install -r requirements.txt
 	cp -n .env.example .env || true
-	@echo "✓ venv ready.  Edit .env then run 'make probe'."
+	@echo "✓ venv ready.  Run 'make demo' to see it work, then edit .env."
 
 dev: install  ## Alias for install.
+
+demo:  ## Run the zero-config end-to-end demo (no token needed).
+	$(VENV)/bin/python scripts/demo_e2e.py
 
 test:  ## Run pytest.
 	$(VENV)/bin/python -m pytest tests/ -v

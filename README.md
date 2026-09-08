@@ -64,19 +64,25 @@ git clone https://github.com/keyneszeng/bagbot.git
 cd bagbot
 make install          # creates .venv, installs deps, copies .env.example → .env
 
-# 2. Configure
+# 2. See it work — zero-config, no token needed
+python scripts/demo_e2e.py    # 5-tick end-to-end demo (mock MCP, prints everything)
+
+# 3. Configure (only needed to connect to real Orbio)
 vim .env             # fill in ORBIO_MCP_TOKEN + ORBIO_WALLET (+ a notifier)
 
-# 3. Verify
-make test            # 80 unit + integration tests, ~30s
+# 4. Verify
+make test            # 97 unit + integration tests, ~45s
 make probe           # exercises all 6 Orbio MCP tools (real network)
 
-# 4. Start daemon (foreground)
+# 5. Start daemon (foreground)
 make run
 # or, as a 7×24 service:
 bash scripts/install_launchd.sh    # macOS
 bash scripts/install_systemd.sh    # Linux
 ```
+
+> **First time?** Run `python scripts/demo_e2e.py` before touching `.env` —
+> it shows the full claim → topup → rotate → alert loop with zero setup.
 
 ---
 
