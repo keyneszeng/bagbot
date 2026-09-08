@@ -40,37 +40,37 @@ class FakeOrbio:
         # 每 tick 的 (get_balance, get_key_status, claim/topup/rotate 的返回)
         self.scenarios = [
             # tick 1: 无 key, 余额 $10 → CLAIM
-            dict(
-                balance={"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
-                claim={"key_id": "k_demo_1", "secret": "sk-or-v1-AAA", "headroom": 200.0},
-                note="场景1: 无key + 余额$10 → 期望 CLAIM",
-            ),
+            {
+                "balance": {"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
+                "claim": {"key_id": "k_demo_1", "secret": "sk-or-v1-AAA", "headroom": 200.0},
+                "note": "场景1: 无key + 余额$10 → 期望 CLAIM",
+            },
             # tick 2: key 用了 85% (spend=170/headroom=30) → TOPUP
-            dict(
-                balance={"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
-                status={"key_id": "k_demo_1", "spend": 170.0, "headroom": 30.0, "remaining": 30.0},
-                topup={"key_id": "k_demo_1", "headroom": 200.0, "spend": 170.0},
-                note="场景2: key已用85% + 有余额 → 期望 TOPUP",
-            ),
+            {
+                "balance": {"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
+                "status": {"key_id": "k_demo_1", "spend": 170.0, "headroom": 30.0, "remaining": 30.0},
+                "topup": {"key_id": "k_demo_1", "headroom": 200.0, "spend": 170.0},
+                "note": "场景2: key已用85% + 有余额 → 期望 TOPUP",
+            },
             # tick 3: key 已 8 天老 → ROTATE(按年龄)
-            dict(
-                balance={"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
-                status={"key_id": "k_demo_1", "spend": 170.0, "headroom": 30.0, "remaining": 30.0},
-                rotate={"key_id": "k_demo_2", "secret": "sk-or-v1-BBB", "headroom": 30.0},
-                note="场景3: key已老(>168h) → 期望 ROTATE(年龄)",
-            ),
+            {
+                "balance": {"earned": 10.0, "claimed": 0.0, "unclaimed": 10.0},
+                "status": {"key_id": "k_demo_1", "spend": 170.0, "headroom": 30.0, "remaining": 30.0},
+                "rotate": {"key_id": "k_demo_2", "secret": "sk-or-v1-BBB", "headroom": 30.0},
+                "note": "场景3: key已老(>168h) → 期望 ROTATE(年龄)",
+            },
             # tick 4: key耗尽 + 余额$0 → ROTATE(没钱topup)
-            dict(
-                balance={"earned": 0.5, "claimed": 0.5, "unclaimed": 0.0},
-                status={"key_id": "k_demo_2", "spend": 30.0, "headroom": 0.0, "remaining": 0.0},
-                rotate={"key_id": "k_demo_3", "secret": "sk-or-v1-CCC", "headroom": 0.0},
-                note="场景4: key耗尽 + 余额$0 → 期望 ROTATE(没钱)",
-            ),
+            {
+                "balance": {"earned": 0.5, "claimed": 0.5, "unclaimed": 0.0},
+                "status": {"key_id": "k_demo_2", "spend": 30.0, "headroom": 0.0, "remaining": 0.0},
+                "rotate": {"key_id": "k_demo_3", "secret": "sk-or-v1-CCC", "headroom": 0.0},
+                "note": "场景4: key耗尽 + 余额$0 → 期望 ROTATE(没钱)",
+            },
             # tick 5: 无 key + 余额$1 → ALERT
-            dict(
-                balance={"earned": 1.0, "claimed": 0.0, "unclaimed": 1.0},
-                note="场景5: 无key + 余额$1 → 期望 ALERT",
-            ),
+            {
+                "balance": {"earned": 1.0, "claimed": 0.0, "unclaimed": 1.0},
+                "note": "场景5: 无key + 余额$1 → 期望 ALERT",
+            },
         ]
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -78,9 +78,8 @@ class FakeOrbio:
         try:
             body = json.loads(request.content.decode())
             tool = body.get("params", {}).get("name", "")
-            args = body.get("params", {}).get("arguments", {})
         except Exception:
-            tool, args = "", {}
+            tool = ""
 
         sc = self.scenarios[self.tick] if self.tick < len(self.scenarios) else self.scenarios[-1]
 
